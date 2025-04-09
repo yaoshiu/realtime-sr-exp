@@ -1,0 +1,3 @@
+[submodule "cudacanvas"]
+	path = cudacanvas
+	url = ./cudacanvas
