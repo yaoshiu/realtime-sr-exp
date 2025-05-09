@@ -14,16 +14,11 @@
 import math
 
 import torch
+import torchvision
 from math import sqrt
 from torch import nn, Tensor
 
-__all__ = [
-    "ESPCN",
-    "espcn_x2",
-    "espcn_x3",
-    "espcn_x4",
-    "espcn_x8",
-]
+from modules import *
 
 
 class ESPCN(nn.Module):
@@ -57,7 +52,8 @@ class ESPCN(nn.Module):
             if isinstance(module, nn.Conv2d):
                 if module.in_channels == 32:
                     nn.init.normal_(module.weight.data, 0.0, 0.001)
-                    nn.init.zeros_(module.bias.data)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias.data)
                 else:
                     nn.init.normal_(
                         module.weight.data,
@@ -66,7 +62,8 @@ class ESPCN(nn.Module):
                             2 / (module.out_channels * module.weight.data[0][0].numel())
                         ),
                     )
-                    nn.init.zeros_(module.bias.data)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias.data)
 
     def forward(self, x: Tensor) -> Tensor:
         return self._forward_impl(x)
@@ -176,13 +173,131 @@ class FSRCNN(nn.Module):
                     mean=0.0,
                     std=sqrt(2 / (m.out_channels * m.weight.data[0][0].numel())),
                 )
-                nn.init.zeros_(m.bias.data)
-
         nn.init.normal_(self.deconv.weight.data, mean=0.0, std=0.001)
-        nn.init.zeros_(self.deconv.bias.data)
+        if self.deconv.bias is not None:
+            nn.init.zeros_(self.deconv.bias.data)
+        # This line is redundant as we already initialized weights above
+        # nn.init.normal_(self.deconv.weight.data, mean=0.0, std=0.001)
+        # Check if bias exists before initializing
+        if self.deconv.bias is not None:
+            nn.init.zeros_(self.deconv.bias.data)
 
 
 def fsrcnn_x2(**kwargs) -> FSRCNN:
     model = FSRCNN(upscale_factor=2)
 
+    return model
+
+
+class RT4KSR_Rep(nn.Module):
+    def __init__(
+        self,
+        num_channels,
+        num_feats,
+        num_blocks,
+        upscale,
+        act,
+        eca_gamma,
+        is_train,
+        forget,
+        layernorm,
+        residual,
+    ) -> None:
+        super().__init__()
+        self.forget = forget
+        self.gamma = nn.Parameter(torch.zeros(1))
+        self.gaussian = torchvision.transforms.GaussianBlur(kernel_size=5, sigma=1)
+
+        self.down = nn.PixelUnshuffle(2)
+        self.up = nn.PixelShuffle(2)
+        self.head = nn.Sequential(
+            nn.Conv2d(num_channels * (2**2), num_feats, 3, padding=1)
+        )
+
+        hfb = []
+        if is_train:
+            hfb.append(ResBlock(num_feats, ratio=2))
+        else:
+            hfb.append((RepResBlock(num_feats)))
+        hfb.append(act)
+        self.hfb = nn.Sequential(*hfb)
+
+        body = []
+        for i in range(num_blocks):
+            if is_train:
+                body.append(
+                    SimplifiedNAFBlock(
+                        in_c=num_feats,
+                        act=act,
+                        exp=2,
+                        eca_gamma=eca_gamma,
+                        layernorm=layernorm,
+                        residual=residual,
+                    )
+                )
+            else:
+                body.append(
+                    SimplifiedRepNAFBlock(
+                        in_c=num_feats,
+                        act=act,
+                        exp=2,
+                        eca_gamma=eca_gamma,
+                        layernorm=layernorm,
+                        residual=residual,
+                    )
+                )
+
+        self.body = nn.Sequential(*body)
+
+        tail: list[nn.Module] = [LayerNorm2d(num_feats)]
+        if is_train:
+            tail.append(ResBlock(num_feats, ratio=2))
+        else:
+            tail.append(RepResBlock(num_feats))
+        self.tail = nn.Sequential(*tail)
+
+        self.upsample = nn.Sequential(
+            nn.Conv2d(num_feats, num_channels * ((2 * upscale) ** 2), 3, padding=1),
+            nn.PixelShuffle(upscale * 2),
+        )
+
+    def forward(self, x):
+        # stage 1
+        hf = x - self.gaussian(x)
+
+        # unshuffle to save computation
+        x_unsh = self.down(x)
+        hf_unsh = self.down(hf)
+
+        shallow_feats_hf = self.head(hf_unsh)
+        shallow_feats_lr = self.head(x_unsh)
+
+        # stage 2
+        deep_feats = self.body(shallow_feats_lr)
+        hf_feats = self.hfb(shallow_feats_hf)
+
+        # stage 3
+        if self.forget:
+            deep_feats = self.tail(self.gamma * deep_feats + hf_feats)
+        else:
+            deep_feats = self.tail(deep_feats)
+
+        out = self.upsample(deep_feats)
+        return out
+
+
+def rt4ksr_x2(**kwargs):
+    act = activation("gelu")
+    model = RT4KSR_Rep(
+            num_channels=1,
+            num_feats=24,
+            num_blocks=4,
+            upscale=2,
+            act=act,
+            eca_gamma=0,
+            forget=False,
+            is_train=True,
+            layernorm=True,
+            residual=False,
+        )
     return model

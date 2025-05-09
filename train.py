@@ -1,0 +1,326 @@
+import os
+import shutil
+import time
+
+import argparse
+import torch
+from torch import optim
+from torch import amp
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard.writer import SummaryWriter
+from dataset import CUDAPrefetcher, VideoFrameDataset
+from utils import PSNR, SSIM, AverageMeter, ProgressMeter, build_model, choice_device
+
+
+def load_dataset(
+    lr_dir: str,
+    hr_dir: str,
+    upscale_factor: float,
+    device: torch.device,
+    frame_step=1,
+    cache=False,
+    split=0.8,
+    batch_size=16,
+    num_workers=4,
+):
+    tr_set = VideoFrameDataset(
+        lr_dir=lr_dir,
+        hr_dir=hr_dir,
+        upscale_factor=upscale_factor,
+        device=device,
+        frame_step=frame_step,
+        cache=cache,
+        mode="train",
+        split=split,
+    )
+    te_set = VideoFrameDataset(
+        lr_dir=lr_dir,
+        hr_dir=hr_dir,
+        upscale_factor=upscale_factor,
+        device=device,
+        frame_step=frame_step,
+        cache=cache,
+        mode="test",
+        split=split,
+    )
+
+    tr_loader = DataLoader(
+        tr_set,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        drop_last=True,
+        persistent_workers=True,
+    )
+    te_loader = DataLoader(
+        te_set,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        drop_last=False,
+        persistent_workers=True,
+    )
+
+    tr_prefetcher = CUDAPrefetcher(tr_loader, device=device)
+    te_prefetcher = CUDAPrefetcher(te_loader, device=device)
+
+    return tr_prefetcher, te_prefetcher
+
+
+def train(
+    model: torch.nn.Module,
+    device: torch.device,
+    train_prefetcher: CUDAPrefetcher[dict[str, torch.Tensor]],
+    criterion: torch.nn.MSELoss,
+    optimizer: optim.SGD,
+    epoch: int,
+    scaler: amp.grad_scaler.GradScaler,
+    writer: SummaryWriter,
+    print_freq=200,
+):
+    batches = len(train_prefetcher)
+
+    batch_time = AverageMeter("Time", ":6.3f")
+    data_time = AverageMeter("Data", ":6.3f")
+    losses = AverageMeter("Loss", ":6.6f")
+    progress = ProgressMeter(
+        batches,
+        [batch_time, data_time, losses],
+        prefix=f"Epoch: [{epoch + 1}]",
+    )
+
+    model.train()
+
+    batch_index = 0
+
+    end = time.time()
+
+    train_prefetcher.reset()
+    batch_data = train_prefetcher.next()
+
+    while batch_data is not None:
+        data_time.update(time.time() - end)
+
+        lr = batch_data["lr"].to(device, non_blocking=True)
+        hr = batch_data["hr"].to(device, non_blocking=True)
+
+        model.zero_grad()
+
+        with amp.autocast_mode.autocast("cuda"):
+            sr = model(lr)
+            if args.upscale_factor != 2:
+                sr = torch.nn.functional.interpolate(
+                    sr,
+                    scale_factor=args.upscale_factor / 2,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            loss = criterion(sr, hr)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        losses.update(loss.item(), lr.size(0))
+
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if batch_index % print_freq == 0:
+            writer.add_scalar(
+                "Train/Loss", loss.item(), batch_index + epoch * batches + 1
+            )
+            progress.display(batch_index + 1)
+
+        batch_data = train_prefetcher.next()
+
+        batch_index += 1
+
+
+def validate(
+    model: torch.nn.Module,
+    valid_prefetcher: CUDAPrefetcher[dict[str, torch.Tensor]],
+    psnr_model: PSNR,
+    ssim_model: SSIM,
+    epoch: int,
+    writer: SummaryWriter,
+    mode="val",
+    print_freq=200,
+):
+    batch_time = AverageMeter("Time", ":6.3f")
+    psnres = AverageMeter("PSNR", ":4.2f")
+    ssimes = AverageMeter("SSIM", ":4.4f")
+    progress = ProgressMeter(
+        len(valid_prefetcher),
+        [batch_time, psnres, ssimes],
+        prefix=f"{mode}: ",
+    )
+
+    model.eval()
+
+    batch_index = 0
+
+    valid_prefetcher.reset()
+    batch_data = valid_prefetcher.next()
+
+    end = time.time()
+
+    with torch.no_grad():
+        while batch_data is not None:
+            lr = batch_data["lr"]
+            hr = batch_data["hr"]
+
+            with amp.autocast_mode.autocast("cuda"):
+                sr = model(lr)
+
+            psnr = psnr_model(sr, hr)
+            ssim = ssim_model(sr, hr)
+
+            psnres.update(psnr.item(), lr.size(0))
+            ssimes.update(ssim.item(), lr.size(0))
+
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if batch_index % print_freq == 0:
+                progress.display(batch_index + 1)
+
+            batch_data = valid_prefetcher.next()
+
+            batch_index += 1
+
+    progress.display_summary()
+
+    writer.add_scalar(f"{mode}/PSNR", psnres.avg, epoch + 1)
+    writer.add_scalar(f"{mode}/SSIM", ssimes.avg, epoch + 1)
+
+    return psnres.avg, ssimes.avg
+
+
+def main(args):
+    start_epoch = 0
+
+    best_psnr = 0.0
+    best_ssim = 0.0
+
+    device = choice_device(args.device)
+
+    train_prefetcher, test_prefetcher = load_dataset(
+        args.lr_dir, args.hr_dir, args.upscale_factor, device
+    )
+    print("Load datasets successfully.")
+
+    model = build_model(args.model_arch_name, device)
+    print(f"Build `{args.model_arch_name}` model successfully.")
+
+    criterion = torch.nn.MSELoss().to(device=device)
+    print("Define loss function successfully.")
+
+    optimizer = optim.SGD(
+        model.parameters(),
+        lr=args.model_lr,
+        momentum=args.model_momentum,
+        weight_decay=args.model_weight_decay,
+        nesterov=args.model_nesterov,
+    )
+    print("Define optimizer successfully.")
+
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.model_milestones, gamma=args.model_gamma)
+    print("Define scheduler successfully.")
+
+    if args.model_weights_path:
+        checkpoint = torch.load(
+            args.model_weights_path, map_location=lambda storage, _: storage
+        )
+        start_epoch = checkpoint["epoch"]
+        best_psnr = checkpoint["best_psnr"]
+        best_ssim = checkpoint["best_ssim"]
+        model.load_state_dict(checkpoint["state_dict"], strict=False)
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
+        print(f"Load model weights from `{args.model_weights_path}` successfully.")
+    else:
+        print("No model weights path provided, starting from scratch.")
+
+    samples_dir = os.path.join(args.samples_dir, args.model_arch_name)
+    results_dir = os.path.join(args.results_dir, args.model_arch_name)
+    os.makedirs(samples_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
+
+    writer = SummaryWriter(os.path.join(samples_dir, "logs", args.model_arch_name))
+
+    scaler = amp.grad_scaler.GradScaler("cuda")
+
+    psnr_model = PSNR(args.upscale_factor, False).to(device=device)
+    ssim_model = SSIM(args.upscale_factor, False).to(device=device)
+
+    for epoch in range(start_epoch, args.epochs):
+        train(
+            model,
+            device,
+            train_prefetcher,
+            criterion,
+            optimizer,
+            epoch,
+            scaler,
+            writer,
+        )
+        psnr, ssim = validate(
+            model,
+            test_prefetcher,
+            psnr_model,
+            ssim_model,
+            epoch,
+            writer,
+            mode="test",
+        )
+        print("\n")
+
+        scheduler.step()
+
+        is_best = psnr > best_psnr and ssim > best_ssim
+        is_last = epoch + 1 == args.epochs
+        best_psnr = max(psnr, best_psnr)
+        best_ssim = max(ssim, best_ssim)
+        torch.save(
+            {
+                "epoch": epoch + 1,
+                "best_psnr": best_psnr,
+                "best_ssim": best_ssim,
+                "state_dict": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+            },
+            os.path.join(samples_dir, f"epoch_{epoch + 1}.pth"),
+        )
+        if is_best:
+            shutil.copyfile(
+                os.path.join(samples_dir, f"epoch_{epoch + 1}.pth"),
+                os.path.join(results_dir, "best.pth"),
+            )
+        if is_last:
+            shutil.copyfile(
+                os.path.join(samples_dir, f"epoch_{epoch + 1}.pth"),
+                os.path.join(results_dir, "last.pth"),
+            )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train a super-resolution model.")
+    parser.add_argument("--lr_dir", type=str, default="./data/LR")
+    parser.add_argument("--hr_dir", type=str, default="./data/HR")
+    parser.add_argument("--samples_dir", type=str, default="./samples")
+    parser.add_argument("--results_dir", type=str, default="./results")
+    parser.add_argument("--epochs", type=int, default=3000)
+    parser.add_argument("--upscale_factor", type=float, default=1.5)
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--model_weights_path", type=str, default=None)
+    parser.add_argument("--model_milestones", type=list, default=[300, 2400])
+    parser.add_argument("--model_gamma", type=float, default=0.1)
+    parser.add_argument("--model_arch_name", type=str, default="rt4ksr_x2")
+    parser.add_argument("--model_lr", type=float, default=1e-3)
+    parser.add_argument("--model_momentum", type=float, default=0.9)
+    parser.add_argument("--model_weight_decay", type=float, default=1e-4)
+    parser.add_argument("--model_nesterov", type=bool, default=False)
+    args = parser.parse_args()
+    main(args)

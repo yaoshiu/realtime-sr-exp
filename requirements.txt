@@ -4,4 +4,4 @@ tqdm
 torch
 setuptools
 torchvision
-natsort
+tensorboard
