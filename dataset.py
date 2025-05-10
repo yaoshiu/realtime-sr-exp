@@ -24,10 +24,11 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
         self.samples = []
         self.decoders = []
-        for vid_idx, path in enumerate(lr_paths):
-            decoder = VideoDecoder(path, device=device)
-            self.decoders.append(decoder)
-            n = decoder.metadata.num_frames
+        for vid_idx, (lr_path, hr_path) in enumerate(zip(lr_paths, hr_paths)):
+            lr_decoder = VideoDecoder(lr_path, device=device)
+            hr_decoder = VideoDecoder(hr_path, device=device)
+            self.decoders.append((lr_decoder, hr_decoder))
+            n = lr_decoder.metadata.num_frames
 
             tr = split
             if mode == "train":
@@ -44,17 +45,17 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         vid_idx, frm_idx = self.samples[idx]
 
-        lr = self._grab_frame(vid_idx, frm_idx)
-        hr = self._grab_frame(vid_idx, frm_idx)
+        return self._grab_frame(vid_idx, frm_idx)
+
+    def _grab_frame(
+        self, vid_idx: int, frm_idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        lr_decoder, hr_decoder = self.decoders[vid_idx]
+
+        lr = lr_decoder[frm_idx]
+        hr = hr_decoder[frm_idx]
 
         return lr, hr
-
-    def _grab_frame(self, vid_idx: int, frm_idx: int) -> torch.Tensor:
-        decoder = self.decoders[vid_idx]
-
-        frame = decoder[frm_idx]
-
-        return frame
 
 
 T = TypeVar("T")
