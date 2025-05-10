@@ -54,8 +54,6 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
         frame = decoder[frm_idx]
 
-        frame = frame.to(torch.float) / 255.0
-
         return frame
 
 

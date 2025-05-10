@@ -83,15 +83,18 @@ def train(
     for lr, hr in train_loader:
         data_time.update(time.time() - end)
 
-        lr = lr.to(device)
-        hr = hr.to(device)
-
-        lr = rgb_to_y_torch(lr)
-        hr = rgb_to_y_torch(hr)
+        lr = lr.to(device=device, dtype=torch.float32)
+        hr = hr.to(device=device, dtype=torch.float32)
 
         model.zero_grad()
 
         with amp.autocast_mode.autocast("cuda"):
+            lr = lr.unsqueeze_(0) / 255.0
+            hr = hr.unsqueeze_(0) / 255.0
+
+            lr = rgb_to_y_torch(lr)
+            hr = rgb_to_y_torch(hr)
+
             sr = model(lr)
             if args.upscale_factor != 2:
                 sr = torch.nn.functional.interpolate(
@@ -148,13 +151,16 @@ def validate(
 
     with torch.no_grad():
         for lr, hr in valid_loader:
-            lr = lr.to(device)
-            hr = hr.to(device)
-
-            lr = rgb_to_ycbcr_torch(lr)
-            hr = rgb_to_ycbcr_torch(hr)
+            lr = lr.to(device=device, dtype=torch.float32)
+            hr = hr.to(device=device, dtype=torch.float32)
 
             with amp.autocast_mode.autocast("cuda"):
+                lr = lr.unsqueeze_(0) / 255.0
+                hr = hr.unsqueeze_(0) / 255.0
+
+                lr = rgb_to_ycbcr_torch(lr)
+                hr = rgb_to_ycbcr_torch(hr)
+
                 lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
 
                 sr_cb = F.interpolate(
