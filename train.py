@@ -205,16 +205,16 @@ def main(args):
 
     device = choice_device(args.device)
 
-    train_prefetcher, test_prefetcher = load_dataset(
-        args.lr_dir, args.hr_dir, args.upscale_factor, device
-    )
-    print("Load datasets successfully.")
-
     model = build_model(args.model_arch_name)
     if device.type == "cuda" and torch.cuda.device_count() > 1:
         model = DataParallel(model)
     model = model.to(device=device)
     print(f"Build `{args.model_arch_name}` model successfully.")
+
+    train_prefetcher, test_prefetcher = load_dataset(
+        args.lr_dir, args.hr_dir, args.upscale_factor, device
+    )
+    print("Load datasets successfully.")
 
     criterion = torch.nn.MSELoss().to(device=device)
     print("Define loss function successfully.")
