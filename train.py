@@ -67,7 +67,6 @@ def load_dataset(
 
 def train(
     model: torch.nn.Module,
-    device: torch.device,
     train_prefetcher: CUDAPrefetcher[dict[str, torch.Tensor]],
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
@@ -278,7 +277,7 @@ def main(args):
     os.makedirs(samples_dir, exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
 
-    writer = SummaryWriter(os.path.join(samples_dir, "logs", args.model_arch_name))
+    writer = SummaryWriter(os.path.join(samples_dir, "logs"))
 
     scaler_enabled = device.type == "cuda"
     scaler = amp.grad_scaler.GradScaler("cuda", enabled=scaler_enabled)
@@ -289,7 +288,6 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         train(
             model,
-            device,
             train_prefetcher,
             criterion,
             optimizer,
