@@ -231,7 +231,7 @@ def main(args):
     model = model.to(device=device)
     print(f"Build `{args.model_arch_name}` model successfully.")
 
-    train_loader, test_loader = load_dataset(args.lr_dir, args.hr_dir, device=device)
+    train_loader, test_loader = load_dataset(args.lr_dir, args.hr_dir)
     print("Load datasets successfully.")
 
     criterion = torch.nn.MSELoss().to(device=device)
