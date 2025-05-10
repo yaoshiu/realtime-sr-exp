@@ -15,30 +15,23 @@ from utils import *
 def load_dataset(
     lr_dir: str,
     hr_dir: str,
-    upscale_factor: float,
     device: torch.device,
-    frame_step=1,
-    cache=False,
     split=0.8,
     batch_size=32,
-    num_workers=20,
+    num_workers=0,
 ):
     tr_set = VideoFrameDataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
-        upscale_factor=upscale_factor,
-        frame_step=frame_step,
-        cache=cache,
         mode="train",
+        device=device,
         split=split,
     )
     te_set = VideoFrameDataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
-        upscale_factor=upscale_factor,
-        frame_step=frame_step,
-        cache=cache,
         mode="test",
+        device=device,
         split=split,
     )
 
@@ -59,15 +52,12 @@ def load_dataset(
         persistent_workers=True,
     )
 
-    tr_prefetcher = CUDAPrefetcher(tr_loader, device=device)
-    te_prefetcher = CUDAPrefetcher(te_loader, device=device)
-
-    return tr_prefetcher, te_prefetcher
+    return tr_loader, te_loader
 
 
 def train(
     model: torch.nn.Module,
-    train_prefetcher: CUDAPrefetcher[dict[str, torch.Tensor]],
+    train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
     epoch: int,
@@ -75,7 +65,7 @@ def train(
     writer: SummaryWriter,
     print_freq=200,
 ):
-    batches = len(train_prefetcher)
+    batches = len(train_loader)
 
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
@@ -92,17 +82,11 @@ def train(
 
     end = time.time()
 
-    train_prefetcher.reset()
-    batch_data = train_prefetcher.next()
-
-    while batch_data is not None:
+    for lr, hr in train_loader:
         data_time.update(time.time() - end)
 
-        lr = batch_data["lr"]
-        hr = batch_data["hr"]
-
-        lr = bgr_to_y_torch(lr)
-        hr = bgr_to_y_torch(hr)
+        lr = rgb_to_y_torch(lr)
+        hr = rgb_to_y_torch(hr)
 
         model.zero_grad()
 
@@ -132,14 +116,12 @@ def train(
             )
             progress.display(batch_index + 1)
 
-        batch_data = train_prefetcher.next()
-
         batch_index += 1
 
 
 def validate(
     model: torch.nn.Module,
-    valid_prefetcher: CUDAPrefetcher[dict[str, torch.Tensor]],
+    valid_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     psnr_model: PSNR,
     ssim_model: SSIM,
     epoch: int,
@@ -151,7 +133,7 @@ def validate(
     psnres = AverageMeter("PSNR", ":4.2f")
     ssimes = AverageMeter("SSIM", ":4.4f")
     progress = ProgressMeter(
-        len(valid_prefetcher),
+        len(valid_loader),
         [batch_time, psnres, ssimes],
         prefix=f"{mode}: ",
     )
@@ -160,18 +142,12 @@ def validate(
 
     batch_index = 0
 
-    valid_prefetcher.reset()
-    batch_data = valid_prefetcher.next()
-
     end = time.time()
 
     with torch.no_grad():
-        while batch_data is not None:
-            lr = batch_data["lr"]
-            hr = batch_data["hr"]
-
-            lr = bgr_to_ycbcr_torch(lr)
-            hr = bgr_to_ycbcr_torch(hr)
+        for lr, hr in valid_loader:
+            lr = rgb_to_ycbcr_torch(lr)
+            hr = rgb_to_ycbcr_torch(hr)
 
             with amp.autocast_mode.autocast("cuda"):
                 lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
@@ -213,8 +189,6 @@ def validate(
             if batch_index % print_freq == 0:
                 progress.display(batch_index + 1)
 
-            batch_data = valid_prefetcher.next()
-
             batch_index += 1
 
     progress.display_summary()
@@ -240,8 +214,8 @@ def main(args):
     model = model.to(device=device)
     print(f"Build `{args.model_arch_name}` model successfully.")
 
-    train_prefetcher, test_prefetcher = load_dataset(
-        args.lr_dir, args.hr_dir, args.upscale_factor, device
+    train_loader, test_loader = load_dataset(
+        args.lr_dir, args.hr_dir, args.upscale_factor
     )
     print("Load datasets successfully.")
 
@@ -306,7 +280,7 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         train(
             model,
-            train_prefetcher,
+            train_loader,
             criterion,
             optimizer,
             epoch,
@@ -315,7 +289,7 @@ def main(args):
         )
         psnr, ssim = validate(
             model,
-            test_prefetcher,
+            test_loader,
             psnr_model,
             ssim_model,
             epoch,

@@ -1,43 +1,33 @@
 import glob
-from math import e
 from typing import Generic, TypeVar
-import numpy as np
-import cv2
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torchcodec.decoders import VideoDecoder
 
-from utils import image_to_tensor
 
-
-class VideoFrameDataset(Dataset[dict[str, torch.Tensor]]):
+class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __init__(
         self,
         lr_dir: str,
         hr_dir: str,
-        upscale_factor: float,
-        frame_step=1,
-        cache=False,
         mode="train",
+        frame_step=1,
+        device: torch.device | str = "cuda",
         split=0.8,
     ):
-        self.lr_paths = sorted(glob.glob(f"{lr_dir}/*"))
-        self.hr_paths = sorted(glob.glob(f"{hr_dir}/*"))
+        lr_paths = sorted(glob.glob(f"{lr_dir}/*"))
+        hr_paths = sorted(glob.glob(f"{hr_dir}/*"))
 
-        assert len(self.lr_paths) == len(
-            self.hr_paths
-        ), "Mismatch between LR and HR images."
+        assert len(lr_paths) == len(hr_paths), "Mismatch between LR and HR images."
 
-        self.upscale_factor = upscale_factor
-        self.frame_step = frame_step
-        self.cache = cache
         self.mode = mode
 
         self.samples = []
-        self.frame_ranges = []
-        for vid_idx, path in enumerate(self.lr_paths):
-            cap = cv2.VideoCapture(path)
-            n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            cap.release()
+        self.decoders = []
+        for vid_idx, path in enumerate(lr_paths):
+            decoder = VideoDecoder(path, device=device)
+            self.decoders.append(decoder)
+            n = decoder.metadata.num_frames
 
             tr = split
             if mode == "train":
@@ -48,51 +38,21 @@ class VideoFrameDataset(Dataset[dict[str, torch.Tensor]]):
             for f in range(start, end, frame_step):
                 self.samples.append((vid_idx, f))
 
-        if cache:
-            self.lr_cache, self.hr_cache = {}, {}
-            for vid_idx, (lp, hp) in enumerate(zip(self.lr_paths, self.hr_paths)):
-                self.lr_cache[vid_idx] = self._decode_all(lp)
-                self.hr_cache[vid_idx] = self._decode_all(hp)
-
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         vid_idx, frm_idx = self.samples[idx]
 
-        lr = self._grab_frame(self.lr_paths[vid_idx], vid_idx, frm_idx, is_lr=True)
-        hr = self._grab_frame(self.hr_paths[vid_idx], vid_idx, frm_idx, is_lr=False)
+        lr = self._grab_frame(vid_idx, frm_idx)
+        hr = self._grab_frame(vid_idx, frm_idx)
 
-        lr = image_to_tensor(lr)
-        hr = image_to_tensor(hr)
+        return lr, hr
 
-        lr = lr.squeeze_(0)
-        hr = hr.squeeze_(0)
+    def _grab_frame(self, vid_idx: int, frm_idx: int) -> torch.Tensor:
+        decoder = self.decoders[vid_idx]
 
-        return {"lr": lr, "hr": hr}
-
-    def _grab_frame(
-        self, path: str, vid_idx: int, frm_idx: int, *, is_lr=True
-    ) -> np.ndarray:
-        if self.cache:
-            buf = self.lr_cache if is_lr else self.hr_cache
-            return buf[vid_idx][frm_idx]
-
-        cap = cv2.VideoCapture(path)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frm_idx)
-        _, frame = cap.read()
-        cap.release()
-
-        return frame
-
-    def _decode_all(self, path: str) -> list[torch.Tensor]:
-        cap, frames = cv2.VideoCapture(path), []
-        ret, f = cap.read()
-        while ret:
-            frames.append(f)
-            ret, f = cap.read()
-        cap.release()
-        return frames
+        return decoder[frm_idx]
 
 
 T = TypeVar("T")
