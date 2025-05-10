@@ -41,7 +41,6 @@ def load_dataset(
         shuffle=True,
         num_workers=num_workers,
         drop_last=True,
-        persistent_workers=True,
     )
     te_loader = DataLoader(
         te_set,
@@ -49,7 +48,6 @@ def load_dataset(
         shuffle=False,
         num_workers=num_workers,
         drop_last=False,
-        persistent_workers=True,
     )
 
     return tr_loader, te_loader
