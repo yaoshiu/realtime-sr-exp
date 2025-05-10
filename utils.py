@@ -9,26 +9,23 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 
 
-def choice_device(device_type: str) -> torch.device:
-    return torch.device("cuda", 0) if device_type == "cuda" else torch.device("cpu")
+def choice_device(device_type: str):
+    return torch.device(device_type, 0)
 
 
-def build_model(model_arch_name: str, device: torch.device) -> nn.Module:
+def build_model(model_arch_name: str, device: torch.device | None = None) -> nn.Module:
     sr_model = model.__dict__[model_arch_name](
         in_channels=1, out_channels=1, channels=64
     )
-    sr_model = sr_model.to(device=device)
+    if device:
+        sr_model = sr_model.to(device=device)
 
     return sr_model
 
 
 @torch.jit.script
 def bgr_to_y_torch(bgr_tensor: torch.Tensor):
-    weight = torch.tensor([
-        [24.966],
-        [128.553],
-        [65.481]
-    ]).to(bgr_tensor)
+    weight = torch.tensor([[24.966], [128.553], [65.481]]).to(bgr_tensor)
 
     bias = 16.0
 
@@ -60,11 +57,7 @@ def bgr_to_ycbcr_torch(bgr_tensor: torch.Tensor):
 
 @torch.jit.script
 def rgb_to_y_torch(rgb_tensor: torch.Tensor):
-    weight = torch.tensor([
-        [65.481],
-        [128.553],
-        [24.966]
-    ]).to(rgb_tensor)
+    weight = torch.tensor([[65.481], [128.553], [24.966]]).to(rgb_tensor)
 
     bias = 16.0
 
@@ -73,7 +66,6 @@ def rgb_to_y_torch(rgb_tensor: torch.Tensor):
     ) + bias
 
     return y_tensor / 255.0
-
 
 
 @torch.jit.script
@@ -107,7 +99,10 @@ def ycbcr_to_bgr_torch(ycbcr_tensor: torch.Tensor):
         )
     ).to(ycbcr_tensor) / 256.0
 
-    bias = torch.tensor([-276.836, 135.576, -222.921]).view(1, 3, 1, 1).to(ycbcr_tensor) / 255.0
+    bias = (
+        torch.tensor([-276.836, 135.576, -222.921]).view(1, 3, 1, 1).to(ycbcr_tensor)
+        / 255.0
+    )
 
     bgr_tensor = (torch.matmul(ycbcr_tensor.permute(0, 2, 3, 1), weight)).permute(
         0, 3, 1, 2
@@ -128,7 +123,10 @@ def ycbcr_to_rgb_torch(ycbcr_tensor: torch.Tensor):
         )
     ).to(ycbcr_tensor) / 256.0
 
-    bias = torch.tensor([-222.921, 135.576, -276.836]).view(1, 3, 1, 1).to(ycbcr_tensor) / 255.0
+    bias = (
+        torch.tensor([-222.921, 135.576, -276.836]).view(1, 3, 1, 1).to(ycbcr_tensor)
+        / 255.0
+    )
 
     rgb_tensor = (torch.matmul(ycbcr_tensor.permute(0, 2, 3, 1), weight)).permute(
         0, 3, 1, 2
@@ -144,7 +142,7 @@ def bgr_to_rgb_torch(bgr_tensor: torch.Tensor):
     return rgb_tensor
 
 
-def image_to_tensor(image: np.ndarray, device: torch.device, half = False):
+def image_to_tensor(image: np.ndarray, device: torch.device, half=False):
     tensor = torch.from_numpy(image).to(device).permute(2, 0, 1).float() / 255.0
 
     tensor = tensor.to(device).unsqueeze_(0)
@@ -231,13 +229,17 @@ def _check_tensor_shape(raw_tensor: torch.Tensor, dst_tensor: torch.Tensor):
 
     """
     # Check if tensor scales are consistent
-    assert raw_tensor.shape == dst_tensor.shape, \
-        f"Supplied images have different sizes {str(raw_tensor.shape)} and {str(dst_tensor.shape)}"
+    assert (
+        raw_tensor.shape == dst_tensor.shape
+    ), f"Supplied images have different sizes {str(raw_tensor.shape)} and {str(dst_tensor.shape)}"
 
 
-
-def _psnr_torch(raw_tensor: torch.Tensor, dst_tensor: torch.Tensor, crop_border: int,
-                only_test_y_channel: bool) -> torch.Tensor:
+def _psnr_torch(
+    raw_tensor: torch.Tensor,
+    dst_tensor: torch.Tensor,
+    crop_border: int,
+    only_test_y_channel: bool,
+) -> torch.Tensor:
     """PyTorch implements PSNR (Peak Signal-to-Noise Ratio, peak signal-to-noise ratio) function
 
     Args:
@@ -255,8 +257,12 @@ def _psnr_torch(raw_tensor: torch.Tensor, dst_tensor: torch.Tensor, crop_border:
 
     # crop border pixels
     if crop_border > 0:
-        raw_tensor = raw_tensor[:, :, crop_border:-crop_border, crop_border:-crop_border]
-        dst_tensor = dst_tensor[:, :, crop_border:-crop_border, crop_border:-crop_border]
+        raw_tensor = raw_tensor[
+            :, :, crop_border:-crop_border, crop_border:-crop_border
+        ]
+        dst_tensor = dst_tensor[
+            :, :, crop_border:-crop_border, crop_border:-crop_border
+        ]
 
     # Convert RGB tensor data to YCbCr tensor, and extract only Y channel data
     if only_test_y_channel:
@@ -267,8 +273,10 @@ def _psnr_torch(raw_tensor: torch.Tensor, dst_tensor: torch.Tensor, crop_border:
     raw_tensor = raw_tensor.to(torch.float64)
     dst_tensor = dst_tensor.to(torch.float64)
 
-    mse_value = torch.mean((raw_tensor * 255.0 - dst_tensor * 255.0) ** 2 + 1e-8, dim=[1, 2, 3])
-    psnr_metrics = 10 * torch.log10_(255.0 ** 2 / mse_value)
+    mse_value = torch.mean(
+        (raw_tensor * 255.0 - dst_tensor * 255.0) ** 2 + 1e-8, dim=[1, 2, 3]
+    )
+    psnr_metrics = 10 * torch.log10_(255.0**2 / mse_value)
 
     return psnr_metrics
 
@@ -290,16 +298,22 @@ class PSNR(nn.Module):
         self.crop_border = crop_border
         self.only_test_y_channel = only_test_y_channel
 
-    def forward(self, raw_tensor: torch.Tensor, dst_tensor: torch.Tensor) -> torch.Tensor:
-        psnr_metrics = _psnr_torch(raw_tensor, dst_tensor, self.crop_border, self.only_test_y_channel)
+    def forward(
+        self, raw_tensor: torch.Tensor, dst_tensor: torch.Tensor
+    ) -> torch.Tensor:
+        psnr_metrics = _psnr_torch(
+            raw_tensor, dst_tensor, self.crop_border, self.only_test_y_channel
+        )
 
         return psnr_metrics
 
 
-def _ssim_torch(raw_tensor: torch.Tensor,
-                dst_tensor: torch.Tensor,
-                window_size: int,
-                gaussian_kernel_window: np.ndarray) -> torch.Tensor:
+def _ssim_torch(
+    raw_tensor: torch.Tensor,
+    dst_tensor: torch.Tensor,
+    window_size: int,
+    gaussian_kernel_window: np.ndarray,
+) -> torch.Tensor:
     """PyTorch implements the SSIM (Structural Similarity) function, which only calculates single-channel data
 
     Args:
@@ -315,24 +329,64 @@ def _ssim_torch(raw_tensor: torch.Tensor,
     c1 = (0.01 * 255.0) ** 2
     c2 = (0.03 * 255.0) ** 2
 
-    gkw_tensor = torch.from_numpy(gaussian_kernel_window).view(1, 1, window_size, window_size)
+    gkw_tensor = torch.from_numpy(gaussian_kernel_window).view(
+        1, 1, window_size, window_size
+    )
     gkw_tensor = gkw_tensor.expand(raw_tensor.size(1), 1, window_size, window_size)
     gkw_tensor = gkw_tensor.to(device=raw_tensor.device, dtype=raw_tensor.dtype)
 
-    raw_mean = F.conv2d(raw_tensor, gkw_tensor, stride=(1, 1), padding=(0, 0), groups=raw_tensor.shape[1])
-    dst_mean = F.conv2d(dst_tensor, gkw_tensor, stride=(1, 1), padding=(0, 0), groups=dst_tensor.shape[1])
-    raw_mean_square = raw_mean ** 2
-    dst_mean_square = dst_mean ** 2
+    raw_mean = F.conv2d(
+        raw_tensor,
+        gkw_tensor,
+        stride=(1, 1),
+        padding=(0, 0),
+        groups=raw_tensor.shape[1],
+    )
+    dst_mean = F.conv2d(
+        dst_tensor,
+        gkw_tensor,
+        stride=(1, 1),
+        padding=(0, 0),
+        groups=dst_tensor.shape[1],
+    )
+    raw_mean_square = raw_mean**2
+    dst_mean_square = dst_mean**2
     raw_dst_mean = raw_mean * dst_mean
-    raw_variance = F.conv2d(raw_tensor * raw_tensor, gkw_tensor, stride=(1, 1), padding=(0, 0),
-                            groups=raw_tensor.shape[1]) - raw_mean_square
-    dst_variance = F.conv2d(dst_tensor * dst_tensor, gkw_tensor, stride=(1, 1), padding=(0, 0),
-                            groups=raw_tensor.shape[1]) - dst_mean_square
-    raw_dst_covariance = F.conv2d(raw_tensor * dst_tensor, gkw_tensor, stride=1, padding=(0, 0),
-                                  groups=raw_tensor.shape[1]) - raw_dst_mean
+    raw_variance = (
+        F.conv2d(
+            raw_tensor * raw_tensor,
+            gkw_tensor,
+            stride=(1, 1),
+            padding=(0, 0),
+            groups=raw_tensor.shape[1],
+        )
+        - raw_mean_square
+    )
+    dst_variance = (
+        F.conv2d(
+            dst_tensor * dst_tensor,
+            gkw_tensor,
+            stride=(1, 1),
+            padding=(0, 0),
+            groups=raw_tensor.shape[1],
+        )
+        - dst_mean_square
+    )
+    raw_dst_covariance = (
+        F.conv2d(
+            raw_tensor * dst_tensor,
+            gkw_tensor,
+            stride=1,
+            padding=(0, 0),
+            groups=raw_tensor.shape[1],
+        )
+        - raw_dst_mean
+    )
 
     ssim_molecular = (2 * raw_dst_mean + c1) * (2 * raw_dst_covariance + c2)
-    ssim_denominator = (raw_mean_square + dst_mean_square + c1) * (raw_variance + dst_variance + c2)
+    ssim_denominator = (raw_mean_square + dst_mean_square + c1) * (
+        raw_variance + dst_variance + c2
+    )
 
     ssim_metrics = ssim_molecular / ssim_denominator
     ssim_metrics = torch.mean(ssim_metrics, [1, 2, 3]).float()
@@ -340,12 +394,14 @@ def _ssim_torch(raw_tensor: torch.Tensor,
     return ssim_metrics
 
 
-def _ssim_single_torch(raw_tensor: torch.Tensor,
-                       dst_tensor: torch.Tensor,
-                       crop_border: int,
-                       only_test_y_channel: bool,
-                       window_size: int,
-                       gaussian_kernel_window: np.ndarray) -> torch.Tensor:
+def _ssim_single_torch(
+    raw_tensor: torch.Tensor,
+    dst_tensor: torch.Tensor,
+    crop_border: int,
+    only_test_y_channel: bool,
+    window_size: int,
+    gaussian_kernel_window: np.ndarray,
+) -> torch.Tensor:
     """PyTorch implements the SSIM (Structural Similarity) function, which only calculates single-channel data
 
     Args:
@@ -365,8 +421,12 @@ def _ssim_single_torch(raw_tensor: torch.Tensor,
 
     # crop border pixels
     if crop_border > 0:
-        raw_tensor = raw_tensor[:, :, crop_border:-crop_border, crop_border:-crop_border]
-        dst_tensor = dst_tensor[:, :, crop_border:-crop_border, crop_border:-crop_border]
+        raw_tensor = raw_tensor[
+            :, :, crop_border:-crop_border, crop_border:-crop_border
+        ]
+        dst_tensor = dst_tensor[
+            :, :, crop_border:-crop_border, crop_border:-crop_border
+        ]
 
     # Convert RGB tensor data to YCbCr tensor, and extract only Y channel data
     if only_test_y_channel:
@@ -377,7 +437,9 @@ def _ssim_single_torch(raw_tensor: torch.Tensor,
     raw_tensor = raw_tensor.to(torch.float64)
     dst_tensor = dst_tensor.to(torch.float64)
 
-    ssim_metrics = _ssim_torch(raw_tensor * 255.0, dst_tensor * 255.0, window_size, gaussian_kernel_window)
+    ssim_metrics = _ssim_torch(
+        raw_tensor * 255.0, dst_tensor * 255.0, window_size, gaussian_kernel_window
+    )
 
     return ssim_metrics
 
@@ -396,24 +458,33 @@ class SSIM(nn.Module):
 
     """
 
-    def __init__(self, crop_border: int,
-                 only_only_test_y_channel: bool,
-                 window_size: int = 11,
-                 gaussian_sigma: float = 1.5) -> None:
+    def __init__(
+        self,
+        crop_border: int,
+        only_only_test_y_channel: bool,
+        window_size: int = 11,
+        gaussian_sigma: float = 1.5,
+    ) -> None:
         super().__init__()
         self.crop_border = crop_border
         self.only_test_y_channel = only_only_test_y_channel
         self.window_size = window_size
 
         gaussian_kernel = cv2.getGaussianKernel(window_size, gaussian_sigma)
-        self.gaussian_kernel_window = np.outer(gaussian_kernel, gaussian_kernel.transpose())
+        self.gaussian_kernel_window = np.outer(
+            gaussian_kernel, gaussian_kernel.transpose()
+        )
 
-    def forward(self, raw_tensor: torch.Tensor, dst_tensor: torch.Tensor) -> torch.Tensor:
-        ssim_metrics = _ssim_single_torch(raw_tensor,
-                                          dst_tensor,
-                                          self.crop_border,
-                                          self.only_test_y_channel,
-                                          self.window_size,
-                                          self.gaussian_kernel_window)
+    def forward(
+        self, raw_tensor: torch.Tensor, dst_tensor: torch.Tensor
+    ) -> torch.Tensor:
+        ssim_metrics = _ssim_single_torch(
+            raw_tensor,
+            dst_tensor,
+            self.crop_border,
+            self.only_test_y_channel,
+            self.window_size,
+            self.gaussian_kernel_window,
+        )
 
         return ssim_metrics

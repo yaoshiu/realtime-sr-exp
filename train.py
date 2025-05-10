@@ -4,12 +4,12 @@ import time
 
 import argparse
 import torch
-from torch import optim
-from torch import amp
+from torch import amp, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
+from torch.nn import DataParallel
 from dataset import CUDAPrefetcher, VideoFrameDataset
-from utils import PSNR, SSIM, AverageMeter, ProgressMeter, build_model, choice_device
+from utils import *
 
 
 def load_dataset(
@@ -210,7 +210,10 @@ def main(args):
     )
     print("Load datasets successfully.")
 
-    model = build_model(args.model_arch_name, device)
+    model = build_model(args.model_arch_name)
+    if device.type == "cuda" and torch.cuda.device_count() > 1:
+        model = DataParallel(model)
+    model = model.to(device=device)
     print(f"Build `{args.model_arch_name}` model successfully.")
 
     criterion = torch.nn.MSELoss().to(device=device)
@@ -225,19 +228,35 @@ def main(args):
     )
     print("Define optimizer successfully.")
 
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.model_milestones, gamma=args.model_gamma)
+    scheduler = optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=args.model_milestones, gamma=args.model_gamma
+    )
     print("Define scheduler successfully.")
 
     if args.model_weights_path:
         checkpoint = torch.load(
             args.model_weights_path, map_location=lambda storage, _: storage
         )
-        start_epoch = checkpoint["epoch"]
-        best_psnr = checkpoint["best_psnr"]
-        best_ssim = checkpoint["best_ssim"]
-        model.load_state_dict(checkpoint["state_dict"], strict=False)
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        scheduler.load_state_dict(checkpoint["scheduler"])
+        start_epoch = checkpoint.get("epoch", 0)
+        best_psnr = checkpoint.get("best_psnr", 0.0)
+        best_ssim = checkpoint.get("best_ssim", 0.0)
+        state_dict = checkpoint.get("state_dict", None)
+        if isinstance(model, DataParallel):
+            model.module.load_state_dict(state_dict, strict=False)
+        else:
+            from collections import OrderedDict
+
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                if k.startswith("module."):
+                    new_state_dict[k[7:]] = v
+                else:
+                    new_state_dict[k] = v
+            model.load_state_dict(new_state_dict, strict=False)
+        if "optimizer" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer"])
+        if "scheduler" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler"])
         print(f"Load model weights from `{args.model_weights_path}` successfully.")
     else:
         print("No model weights path provided, starting from scratch.")
@@ -249,7 +268,8 @@ def main(args):
 
     writer = SummaryWriter(os.path.join(samples_dir, "logs", args.model_arch_name))
 
-    scaler = amp.grad_scaler.GradScaler("cuda")
+    scaler_enabled = device.type == "cuda"
+    scaler = amp.grad_scaler.GradScaler("cuda", enabled=scaler_enabled)
 
     psnr_model = PSNR(args.upscale_factor, False).to(device=device)
     ssim_model = SSIM(args.upscale_factor, False).to(device=device)
@@ -282,18 +302,26 @@ def main(args):
         is_last = epoch + 1 == args.epochs
         best_psnr = max(psnr, best_psnr)
         best_ssim = max(ssim, best_ssim)
+
+        state_dict = (
+            model.module.state_dict()
+            if isinstance(model, DataParallel)
+            else model.state_dict()
+        )
+
         torch.save(
             {
                 "epoch": epoch + 1,
                 "best_psnr": best_psnr,
                 "best_ssim": best_ssim,
-                "state_dict": model.state_dict(),
+                "state_dict": state_dict,
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
             },
             os.path.join(samples_dir, f"epoch_{epoch + 1}.pth"),
         )
         if is_best:
+            print(f"Best PSNR: {best_psnr:.4f}, Best SSIM: {best_ssim:.4f}")
             shutil.copyfile(
                 os.path.join(samples_dir, f"epoch_{epoch + 1}.pth"),
                 os.path.join(results_dir, "best.pth"),
@@ -303,6 +331,8 @@ def main(args):
                 os.path.join(samples_dir, f"epoch_{epoch + 1}.pth"),
                 os.path.join(results_dir, "last.pth"),
             )
+
+    writer.close()
 
 
 if __name__ == "__main__":

@@ -135,19 +135,18 @@ def main(args):
     sr_model.half()
     sr_model.eval()
 
-    cap = cv2.VideoCapture(args.input_video_path, cv2.CAP_FFMPEG)
+    cap = cv2.VideoCapture(args.input_video_path)
     if not cap.isOpened():
         print("Error: Could not open video.")
         return
-    cap.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
-
-    init = time.perf_counter()
-    last_time = 0
-    frames = 0
 
     max_delay = args.max_delay
 
     upscale_factor = args.upscale_factor
+
+    init = time.perf_counter()
+    last_time = 0
+    frames = 0
 
     while True:
         ret, frame = cap.read()
