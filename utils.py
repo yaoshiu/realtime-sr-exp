@@ -142,10 +142,13 @@ def bgr_to_rgb_torch(bgr_tensor: torch.Tensor):
     return rgb_tensor
 
 
-def image_to_tensor(image: np.ndarray, device: torch.device, half=False):
+def image_to_tensor(image: np.ndarray, device: torch.device | None = None, half=False):
     tensor = torch.from_numpy(image).to(device).permute(2, 0, 1).float() / 255.0
 
-    tensor = tensor.to(device).unsqueeze_(0)
+    if device:
+        tensor = tensor.to(device)
+
+    tensor = tensor.unsqueeze_(0)
 
     if half:
         tensor = tensor.half()

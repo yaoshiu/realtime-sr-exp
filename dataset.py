@@ -6,7 +6,7 @@ import cv2
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from utils import bgr_to_y_torch, bgr_to_ycbcr_torch, image_to_tensor
+from utils import image_to_tensor
 
 
 class VideoFrameDataset(Dataset[dict[str, torch.Tensor]]):
@@ -15,7 +15,6 @@ class VideoFrameDataset(Dataset[dict[str, torch.Tensor]]):
         lr_dir: str,
         hr_dir: str,
         upscale_factor: float,
-        device: torch.device,
         frame_step=1,
         cache=False,
         mode="train",
@@ -31,7 +30,6 @@ class VideoFrameDataset(Dataset[dict[str, torch.Tensor]]):
         self.upscale_factor = upscale_factor
         self.frame_step = frame_step
         self.cache = cache
-        self.device = device
         self.mode = mode
 
         self.samples = []
@@ -65,15 +63,8 @@ class VideoFrameDataset(Dataset[dict[str, torch.Tensor]]):
         lr = self._grab_frame(self.lr_paths[vid_idx], vid_idx, frm_idx, is_lr=True)
         hr = self._grab_frame(self.hr_paths[vid_idx], vid_idx, frm_idx, is_lr=False)
 
-        lr = image_to_tensor(lr, device=self.device)
-        hr = image_to_tensor(hr, device=self.device)
-
-        if self.mode == "train":
-            lr = bgr_to_y_torch(lr)
-            hr = bgr_to_y_torch(hr)
-        else:
-            lr = bgr_to_ycbcr_torch(lr)
-            hr = bgr_to_ycbcr_torch(hr)
+        lr = image_to_tensor(lr)
+        hr = image_to_tensor(hr)
 
         lr = lr.squeeze_(0)
         hr = hr.squeeze_(0)

@@ -27,7 +27,6 @@ def load_dataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         upscale_factor=upscale_factor,
-        device=device,
         frame_step=frame_step,
         cache=cache,
         mode="train",
@@ -37,7 +36,6 @@ def load_dataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         upscale_factor=upscale_factor,
-        device=device,
         frame_step=frame_step,
         cache=cache,
         mode="test",
@@ -101,8 +99,11 @@ def train(
     while batch_data is not None:
         data_time.update(time.time() - end)
 
-        lr = batch_data["lr"].to(device, non_blocking=True)
-        hr = batch_data["hr"].to(device, non_blocking=True)
+        lr = batch_data["lr"]
+        hr = batch_data["hr"]
+
+        lr = bgr_to_y_torch(lr)
+        hr = bgr_to_y_torch(hr)
 
         model.zero_grad()
 
@@ -169,6 +170,9 @@ def validate(
         while batch_data is not None:
             lr = batch_data["lr"]
             hr = batch_data["hr"]
+
+            lr = bgr_to_y_torch(lr)
+            hr = bgr_to_y_torch(hr)
 
             with amp.autocast_mode.autocast("cuda"):
                 sr = model(lr)
