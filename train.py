@@ -17,7 +17,7 @@ def load_dataset(
     hr_dir: str,
     split=0.8,
     batch_size=32,
-    num_workers=0,
+    num_workers=16,
 ):
     tr_set = VideoFrameDataset(
         lr_dir=lr_dir,
@@ -40,6 +40,7 @@ def load_dataset(
         shuffle=True,
         num_workers=num_workers,
         drop_last=True,
+        persistent_workers=True,
     )
     te_loader = DataLoader(
         te_set,
@@ -47,6 +48,7 @@ def load_dataset(
         shuffle=False,
         num_workers=num_workers,
         drop_last=False,
+        persistent_workers=True,
     )
 
     return tr_loader, te_loader
