@@ -24,14 +24,14 @@ def load_dataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="train",
-        device=device,
+        device=device.type,
         split=split,
     )
     te_set = VideoFrameDataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="test",
-        device=device,
+        device=device.type,
         split=split,
     )
 

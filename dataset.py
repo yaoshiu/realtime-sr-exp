@@ -12,7 +12,7 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         hr_dir: str,
         mode="train",
         frame_step=1,
-        device: torch.device | str = "cuda",
+        device: str = "cuda",
         split=0.8,
     ):
         lr_paths = sorted(glob.glob(f"{lr_dir}/*"))
