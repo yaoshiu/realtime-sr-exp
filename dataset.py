@@ -67,6 +67,14 @@ class VideoFrameDataset(Dataset[tuple[np.ndarray, np.ndarray]]):
 
         return lr, hr
 
+    def close(self):
+        for lr_decoder, hr_decoder in self.decoders:
+            lr_decoder.release()
+            hr_decoder.release()
+
+    def __del__(self):
+        self.close()
+
 
 T = TypeVar("T")
 
