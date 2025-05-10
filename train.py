@@ -20,8 +20,8 @@ def load_dataset(
     frame_step=1,
     cache=False,
     split=0.8,
-    batch_size=16,
-    num_workers=4,
+    batch_size=32,
+    num_workers=20,
 ):
     tr_set = VideoFrameDataset(
         lr_dir=lr_dir,
@@ -215,6 +215,7 @@ def main(args):
     best_ssim = 0.0
 
     device = choice_device(args.device)
+    print(f"Using `{device}` device.")
 
     model = build_model(args.model_arch_name)
     if device.type == "cuda" and torch.cuda.device_count() > 1:
