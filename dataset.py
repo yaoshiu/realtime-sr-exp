@@ -55,8 +55,8 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
         lr, hr = self._grab_frame(vid_idx, frm_idx)
 
-        lr = image_to_tensor(lr)
-        hr = image_to_tensor(hr)
+        lr = image_to_tensor(lr).squeeze_(0)
+        hr = image_to_tensor(hr).squeeze_(0)
 
         return lr, hr
 
