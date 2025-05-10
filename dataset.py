@@ -30,11 +30,10 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
             self.decoders.append((lr_decoder, hr_decoder))
             n = min(lr_decoder.metadata.num_frames, hr_decoder.metadata.num_frames)
 
-            tr = split
             if mode == "train":
-                start, end = 0, int(n * tr)
+                start, end = 0, int(n * split)
             else:
-                start, end = int(n * tr), n
+                start, end = int(n * split), n
 
             for f in range(start, end, frame_step):
                 self.samples.append((vid_idx, f))

@@ -15,6 +15,8 @@ from utils import *
 def load_dataset(
     lr_dir: str,
     hr_dir: str,
+    *,
+    device: torch.device | str = "cpu",
     split=0.8,
     batch_size=32,
     num_workers=16,
@@ -23,14 +25,14 @@ def load_dataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="train",
-        device="cpu",
+        device=device,
         split=split,
     )
     te_set = VideoFrameDataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="test",
-        device="cpu",
+        device=device,
         split=split,
     )
 
@@ -229,7 +231,7 @@ def main(args):
     model = model.to(device=device)
     print(f"Build `{args.model_arch_name}` model successfully.")
 
-    train_loader, test_loader = load_dataset(args.lr_dir, args.hr_dir)
+    train_loader, test_loader = load_dataset(args.lr_dir, args.hr_dir, device=device)
     print("Load datasets successfully.")
 
     criterion = torch.nn.MSELoss().to(device=device)
