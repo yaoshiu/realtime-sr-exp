@@ -58,6 +58,7 @@ def train(
     train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
+    upscale_factor: float,
     epoch: int,
     scaler: amp.grad_scaler.GradScaler,
     writer: SummaryWriter,
@@ -96,10 +97,10 @@ def train(
             hr = rgb_to_y_torch(hr)
 
             sr = model(lr)
-            if args.upscale_factor != 2:
-                sr = torch.nn.functional.interpolate(
+            if upscale_factor != 2:
+                sr = F.interpolate(
                     sr,
-                    scale_factor=args.upscale_factor / 2,
+                    scale_factor=upscale_factor / 2,
                     mode="bilinear",
                     align_corners=False,
                 )
@@ -130,6 +131,7 @@ def validate(
     psnr_model: PSNR,
     ssim_model: SSIM,
     epoch: int,
+    upscale_factor: float,
     writer: SummaryWriter,
     mode="val",
     print_freq=200,
@@ -165,23 +167,23 @@ def validate(
 
                 sr_cb = F.interpolate(
                     lr_cb,
-                    scale_factor=args.upscale_factor,
+                    scale_factor=upscale_factor,
                     mode="bilinear",
                     align_corners=False,
                 )
                 sr_cr = F.interpolate(
                     lr_cr,
-                    scale_factor=args.upscale_factor,
+                    scale_factor=upscale_factor,
                     mode="bilinear",
                     align_corners=False,
                 )
 
                 sr_y = model(lr_y)
 
-                if args.upscale_factor != 2:
+                if upscale_factor != 2:
                     sr_y = torch.nn.functional.interpolate(
                         sr_y,
-                        scale_factor=args.upscale_factor / 2,
+                        scale_factor=upscale_factor / 2,
                         mode="bilinear",
                         align_corners=False,
                     )
@@ -293,6 +295,7 @@ def main(args):
             train_loader,
             criterion,
             optimizer,
+            args.upscale_factor,
             epoch,
             scaler,
             writer,
@@ -304,6 +307,7 @@ def main(args):
             psnr_model,
             ssim_model,
             epoch,
+            args.upscale_factor,
             writer,
             mode="test",
         )
