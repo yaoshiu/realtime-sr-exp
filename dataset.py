@@ -28,7 +28,7 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
             lr_decoder = VideoDecoder(lr_path, device=device)
             hr_decoder = VideoDecoder(hr_path, device=device)
             self.decoders.append((lr_decoder, hr_decoder))
-            n = lr_decoder.metadata.num_frames
+            n = min(lr_decoder.metadata.num_frames, hr_decoder.metadata.num_frames)
 
             tr = split
             if mode == "train":
