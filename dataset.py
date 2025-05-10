@@ -51,8 +51,8 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         lr_decoder, hr_decoder = self.decoders[vid_idx]
 
-        lr = lr_decoder[frm_idx]
-        hr = hr_decoder[frm_idx]
+        lr = lr_decoder.get_frame_at(frm_idx).data
+        hr = hr_decoder.get_frame_at(frm_idx).data
 
         return lr, hr
 
