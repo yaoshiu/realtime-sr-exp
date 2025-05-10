@@ -15,7 +15,6 @@ from utils import *
 def load_dataset(
     lr_dir: str,
     hr_dir: str,
-    device: torch.device,
     split=0.8,
     batch_size=32,
     num_workers=0,
@@ -24,14 +23,14 @@ def load_dataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="train",
-        device=device,
+        device="cpu",
         split=split,
     )
     te_set = VideoFrameDataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="test",
-        device=device,
+        device="cpu",
         split=split,
     )
 
@@ -55,6 +54,7 @@ def load_dataset(
 
 def train(
     model: torch.nn.Module,
+    device: torch.device,
     train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
@@ -82,6 +82,9 @@ def train(
 
     for lr, hr in train_loader:
         data_time.update(time.time() - end)
+
+        lr = lr.to(device)
+        hr = hr.to(device)
 
         lr = rgb_to_y_torch(lr)
         hr = rgb_to_y_torch(hr)
@@ -119,6 +122,7 @@ def train(
 
 def validate(
     model: torch.nn.Module,
+    device: torch.device,
     valid_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     psnr_model: PSNR,
     ssim_model: SSIM,
@@ -144,6 +148,9 @@ def validate(
 
     with torch.no_grad():
         for lr, hr in valid_loader:
+            lr = lr.to(device)
+            hr = hr.to(device)
+
             lr = rgb_to_ycbcr_torch(lr)
             hr = rgb_to_ycbcr_torch(hr)
 
@@ -212,7 +219,7 @@ def main(args):
     model = model.to(device=device)
     print(f"Build `{args.model_arch_name}` model successfully.")
 
-    train_loader, test_loader = load_dataset(args.lr_dir, args.hr_dir, device)
+    train_loader, test_loader = load_dataset(args.lr_dir, args.hr_dir)
     print("Load datasets successfully.")
 
     criterion = torch.nn.MSELoss().to(device=device)
@@ -276,6 +283,7 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         train(
             model,
+            device,
             train_loader,
             criterion,
             optimizer,
@@ -285,6 +293,7 @@ def main(args):
         )
         psnr, ssim = validate(
             model,
+            device,
             test_loader,
             psnr_model,
             ssim_model,
