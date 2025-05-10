@@ -59,7 +59,7 @@ def load_dataset(
 def train(
     model: torch.nn.Module,
     device: torch.device,
-    train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    train_loader: DataLoader[tuple[np.ndarray, np.ndarray]],
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
     upscale_factor: float,
@@ -86,19 +86,16 @@ def train(
     end = time.time()
 
     for lr, hr in train_loader:
-        data_time.update(time.time() - end)
+        lr = image_to_tensor(lr, device=device)
+        hr = image_to_tensor(hr, device=device)
 
-        lr = lr.to(device=device, dtype=torch.float32)
-        hr = hr.to(device=device, dtype=torch.float32)
+        data_time.update(time.time() - end)
 
         model.zero_grad()
 
         with amp.autocast_mode.autocast("cuda"):
-            lr = lr / 255.0
-            hr = hr / 255.0
-
-            lr = rgb_to_y_torch(lr)
-            hr = rgb_to_y_torch(hr)
+            lr = bgr_to_y_torch(lr)
+            hr = bgr_to_y_torch(hr)
 
             sr = model(lr)
             if upscale_factor != 2:
@@ -131,7 +128,7 @@ def train(
 def validate(
     model: torch.nn.Module,
     device: torch.device,
-    valid_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    valid_loader: DataLoader[tuple[np.ndarray, np.ndarray]],
     psnr_model: PSNR,
     ssim_model: SSIM,
     epoch: int,
@@ -157,15 +154,12 @@ def validate(
 
     with torch.no_grad():
         for lr, hr in valid_loader:
-            lr = lr.to(device=device, dtype=torch.float32)
-            hr = hr.to(device=device, dtype=torch.float32)
+            lr = image_to_tensor(lr, device=device)
+            hr = image_to_tensor(hr, device=device)
 
             with amp.autocast_mode.autocast("cuda"):
-                lr = lr / 255.0
-                hr = hr / 255.0
-
-                lr = rgb_to_ycbcr_torch(lr)
-                hr = rgb_to_ycbcr_torch(hr)
+                lr = bgr_to_ycbcr_torch(lr)
+                hr = bgr_to_ycbcr_torch(hr)
 
                 lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
 

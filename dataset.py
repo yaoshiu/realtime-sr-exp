@@ -1,11 +1,12 @@
 import glob
 from typing import Generic, TypeVar
+import numpy as np
 import torch
+import cv2
 from torch.utils.data import Dataset, DataLoader
-from torchcodec.decoders import VideoDecoder
 
 
-class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+class VideoFrameDataset(Dataset[tuple[np.ndarray, np.ndarray]]):
     def __init__(
         self,
         lr_dir: str,
@@ -19,16 +20,21 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         hr_paths = sorted(glob.glob(f"{hr_dir}/*"))
 
         assert len(lr_paths) == len(hr_paths), "Mismatch between LR and HR images."
+        assert len(lr_paths) > 0, "No images found in the specified directories."
 
         self.mode = mode
-
         self.samples = []
-        self.decoders = []
+        self.decoders: list[tuple[cv2.VideoCapture, cv2.VideoCapture]] = []
+
         for vid_idx, (lr_path, hr_path) in enumerate(zip(lr_paths, hr_paths)):
-            lr_decoder = VideoDecoder(lr_path, device=device)
-            hr_decoder = VideoDecoder(hr_path, device=device)
+            lr_decoder = cv2.VideoCapture(lr_path)
+            hr_decoder = cv2.VideoCapture(hr_path)
+
             self.decoders.append((lr_decoder, hr_decoder))
-            n = min(lr_decoder.metadata.num_frames, hr_decoder.metadata.num_frames)
+
+            lr_frames = int(lr_decoder.get(cv2.CAP_PROP_FRAME_COUNT))
+            hr_frames = int(hr_decoder.get(cv2.CAP_PROP_FRAME_COUNT))
+            n = min(lr_frames, hr_frames)
 
             if mode == "train":
                 start, end = 0, int(n * split)
@@ -41,18 +47,23 @@ class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
         vid_idx, frm_idx = self.samples[idx]
 
         return self._grab_frame(vid_idx, frm_idx)
 
-    def _grab_frame(
-        self, vid_idx: int, frm_idx: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def _grab_frame(self, vid_idx: int, frm_idx: int) -> tuple[np.ndarray, np.ndarray]:
         lr_decoder, hr_decoder = self.decoders[vid_idx]
 
-        lr = lr_decoder.get_frame_at(frm_idx).data
-        hr = hr_decoder.get_frame_at(frm_idx).data
+        lr_decoder.set(cv2.CAP_PROP_POS_FRAMES, frm_idx)
+        ret_lr, lr = lr_decoder.read()
+        if not ret_lr:
+            raise RuntimeError(f"Failed to read frame {frm_idx} from video {vid_idx}")
+
+        hr_decoder.set(cv2.CAP_PROP_POS_FRAMES, frm_idx)
+        ret_hr, hr = hr_decoder.read()
+        if not ret_hr:
+            raise RuntimeError(f"Failed to read frame {frm_idx} from video {vid_idx}")
 
         return lr, hr
 
