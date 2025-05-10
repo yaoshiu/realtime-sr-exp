@@ -89,8 +89,8 @@ def train(
         model.zero_grad()
 
         with amp.autocast_mode.autocast("cuda"):
-            lr = lr.unsqueeze_(0) / 255.0
-            hr = hr.unsqueeze_(0) / 255.0
+            lr = lr / 255.0
+            hr = hr / 255.0
 
             lr = rgb_to_y_torch(lr)
             hr = rgb_to_y_torch(hr)
@@ -155,8 +155,8 @@ def validate(
             hr = hr.to(device=device, dtype=torch.float32)
 
             with amp.autocast_mode.autocast("cuda"):
-                lr = lr.unsqueeze_(0) / 255.0
-                hr = hr.unsqueeze_(0) / 255.0
+                lr = lr / 255.0
+                hr = hr / 255.0
 
                 lr = rgb_to_ycbcr_torch(lr)
                 hr = rgb_to_ycbcr_torch(hr)
