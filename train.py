@@ -24,14 +24,14 @@ def load_dataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="train",
-        device=device.type,
+        device=device,
         split=split,
     )
     te_set = VideoFrameDataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="test",
-        device=device.type,
+        device=device,
         split=split,
     )
 
@@ -214,9 +214,7 @@ def main(args):
     model = model.to(device=device)
     print(f"Build `{args.model_arch_name}` model successfully.")
 
-    train_loader, test_loader = load_dataset(
-        args.lr_dir, args.hr_dir, args.upscale_factor
-    )
+    train_loader, test_loader = load_dataset(args.lr_dir, args.hr_dir, device)
     print("Load datasets successfully.")
 
     criterion = torch.nn.MSELoss().to(device=device)
