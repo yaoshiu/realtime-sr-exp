@@ -170,19 +170,36 @@ def validate(
             lr = batch_data["lr"]
             hr = batch_data["hr"]
 
-            lr = bgr_to_y_torch(lr)
-            hr = bgr_to_y_torch(hr)
+            lr = bgr_to_ycbcr_torch(lr)
+            hr = bgr_to_ycbcr_torch(hr)
 
             with amp.autocast_mode.autocast("cuda"):
-                sr = model(lr)
+                lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
+
+                sr_cb = F.interpolate(
+                    lr_cb,
+                    scale_factor=args.upscale_factor,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                sr_cr = F.interpolate(
+                    lr_cr,
+                    scale_factor=args.upscale_factor,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+
+                sr_y = model(lr_y)
 
                 if args.upscale_factor != 2:
-                    sr = torch.nn.functional.interpolate(
-                        sr,
+                    sr_y = torch.nn.functional.interpolate(
+                        sr_y,
                         scale_factor=args.upscale_factor / 2,
                         mode="bilinear",
                         align_corners=False,
                     )
+
+                sr = torch.cat([sr_y, sr_cb, sr_cr], dim=1)
 
             psnr = psnr_model(sr, hr)
             ssim = ssim_model(sr, hr)
