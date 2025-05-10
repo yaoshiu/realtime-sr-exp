@@ -177,6 +177,14 @@ def validate(
             with amp.autocast_mode.autocast("cuda"):
                 sr = model(lr)
 
+                if args.upscale_factor != 2:
+                    sr = torch.nn.functional.interpolate(
+                        sr,
+                        scale_factor=args.upscale_factor / 2,
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+
             psnr = psnr_model(sr, hr)
             ssim = ssim_model(sr, hr)
 
