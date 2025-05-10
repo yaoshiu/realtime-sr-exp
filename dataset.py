@@ -5,15 +5,16 @@ import torch
 import cv2
 from torch.utils.data import Dataset, DataLoader
 
+from utils import image_to_tensor
 
-class VideoFrameDataset(Dataset[tuple[np.ndarray, np.ndarray]]):
+
+class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __init__(
         self,
         lr_dir: str,
         hr_dir: str,
         mode="train",
         frame_step=1,
-        device: torch.device | str = "cuda",
         split=0.8,
     ):
         lr_paths = sorted(glob.glob(f"{lr_dir}/*"))
@@ -24,16 +25,18 @@ class VideoFrameDataset(Dataset[tuple[np.ndarray, np.ndarray]]):
 
         self.mode = mode
         self.samples = []
-        self.decoders: list[tuple[cv2.VideoCapture, cv2.VideoCapture]] = []
+        self.paths = list(zip(lr_paths, hr_paths))
 
-        for vid_idx, (lr_path, hr_path) in enumerate(zip(lr_paths, hr_paths)):
+        for vid_idx, (lr_path, hr_path) in enumerate(self.paths):
             lr_decoder = cv2.VideoCapture(lr_path)
             hr_decoder = cv2.VideoCapture(hr_path)
 
-            self.decoders.append((lr_decoder, hr_decoder))
-
             lr_frames = int(lr_decoder.get(cv2.CAP_PROP_FRAME_COUNT))
             hr_frames = int(hr_decoder.get(cv2.CAP_PROP_FRAME_COUNT))
+
+            lr_decoder.release()
+            hr_decoder.release()
+
             n = min(lr_frames, hr_frames)
 
             if mode == "train":
@@ -47,13 +50,21 @@ class VideoFrameDataset(Dataset[tuple[np.ndarray, np.ndarray]]):
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         vid_idx, frm_idx = self.samples[idx]
 
-        return self._grab_frame(vid_idx, frm_idx)
+        lr, hr = self._grab_frame(vid_idx, frm_idx)
+
+        lr = image_to_tensor(lr)
+        hr = image_to_tensor(hr)
+
+        return lr, hr
 
     def _grab_frame(self, vid_idx: int, frm_idx: int) -> tuple[np.ndarray, np.ndarray]:
-        lr_decoder, hr_decoder = self.decoders[vid_idx]
+        lr_path, hr_path = self.paths[vid_idx]
+
+        lr_decoder = cv2.VideoCapture(lr_path)
+        hr_decoder = cv2.VideoCapture(hr_path)
 
         lr_decoder.set(cv2.CAP_PROP_POS_FRAMES, frm_idx)
         ret_lr, lr = lr_decoder.read()
@@ -65,15 +76,10 @@ class VideoFrameDataset(Dataset[tuple[np.ndarray, np.ndarray]]):
         if not ret_hr:
             raise RuntimeError(f"Failed to read frame {frm_idx} from video {vid_idx}")
 
+        lr_decoder.release()
+        hr_decoder.release()
+
         return lr, hr
-
-    def close(self):
-        for lr_decoder, hr_decoder in self.decoders:
-            lr_decoder.release()
-            hr_decoder.release()
-
-    def __del__(self):
-        self.close()
 
 
 T = TypeVar("T")

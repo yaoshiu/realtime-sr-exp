@@ -25,14 +25,12 @@ def load_dataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="train",
-        device=device,
         split=split,
     )
     te_set = VideoFrameDataset(
         lr_dir=lr_dir,
         hr_dir=hr_dir,
         mode="test",
-        device=device,
         split=split,
     )
 
@@ -42,6 +40,7 @@ def load_dataset(
         shuffle=True,
         num_workers=num_workers,
         drop_last=True,
+        pin_memory=True,
         persistent_workers=True,
     )
     te_loader = DataLoader(
@@ -50,6 +49,7 @@ def load_dataset(
         shuffle=False,
         num_workers=num_workers,
         drop_last=False,
+        pin_memory=True,
         persistent_workers=True,
     )
 
@@ -59,7 +59,7 @@ def load_dataset(
 def train(
     model: torch.nn.Module,
     device: torch.device,
-    train_loader: DataLoader[tuple[np.ndarray, np.ndarray]],
+    train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
     upscale_factor: float,
@@ -86,8 +86,8 @@ def train(
     end = time.time()
 
     for lr, hr in train_loader:
-        lr = image_to_tensor(lr, device=device)
-        hr = image_to_tensor(hr, device=device)
+        lr = lr.to(device)
+        hr = hr.to(device)
 
         data_time.update(time.time() - end)
 
@@ -128,7 +128,7 @@ def train(
 def validate(
     model: torch.nn.Module,
     device: torch.device,
-    valid_loader: DataLoader[tuple[np.ndarray, np.ndarray]],
+    valid_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     psnr_model: PSNR,
     ssim_model: SSIM,
     epoch: int,
@@ -154,8 +154,8 @@ def validate(
 
     with torch.no_grad():
         for lr, hr in valid_loader:
-            lr = image_to_tensor(lr, device=device)
-            hr = image_to_tensor(hr, device=device)
+            lr = lr.to(device)
+            hr = hr.to(device)
 
             with amp.autocast_mode.autocast("cuda"):
                 lr = bgr_to_ycbcr_torch(lr)
