@@ -1,3 +1,4 @@
+from functools import partial
 from glob import glob
 import os
 import shutil
@@ -15,14 +16,38 @@ from utils import *
 from torch.profiler import profile, ProfilerActivity
 
 
+def random_crop(
+    image: torch.Tensor,
+    crop_size: int,
+) -> torch.Tensor:
+    _, _, h, w = image.size()
+
+    top = torch.randint(0, h - crop_size + 1, (1,)).item()
+    left = torch.randint(0, w - crop_size + 1, (1,)).item()
+
+    return image[:, :, top : top + crop_size, left : left + crop_size]
+
+
+def center_crop(
+    image: torch.Tensor,
+    crop_size: int,
+) -> torch.Tensor:
+    _, h, w = image.size()
+
+    top = (h - crop_size) // 2
+    left = (w - crop_size) // 2
+
+    return image[:, top : top + crop_size, left : left + crop_size]
+
+
 def load_dataset(
     image_dir: str,
     *,
     device: torch.device | str,
     upscale_factor: float,
     split=0.8,
-    batch_size=64,
-    num_workers=12,
+    batch_size=16,
+    num_workers=4,
 ):
     tr_paths, te_paths = train_test_split(
         glob(os.path.join(image_dir, "*.png")),
@@ -34,16 +59,12 @@ def load_dataset(
 
     tr_set = ImageDataset(
         tr_paths,
-        crop_size=int(256 * upscale_factor),
         upscale_factor=upscale_factor,
-        mode="train",
     )
 
     te_set = ImageDataset(
         te_paths,
-        crop_size=int(256 * upscale_factor),
         upscale_factor=upscale_factor,
-        mode="test",
     )
 
     tr_loader = DataLoader(
@@ -64,8 +85,17 @@ def load_dataset(
         pin_memory=True,
         persistent_workers=True,
     )
-    tr_prefetcher = CUDAPrefetcher(tr_loader, device=device)
-    te_prefetcher = CUDAPrefetcher(te_loader, device=device)
+
+    tr_prefetcher = CUDAPrefetcher(
+        tr_loader,
+        preprocess=partial(random_crop, crop_size=int(256 * upscale_factor)),
+        device=device,
+    )
+    te_prefetcher = CUDAPrefetcher(
+        te_loader,
+        preprocess=partial(center_crop, crop_size=int(256 * upscale_factor)),
+        device=device,
+    )
 
     return tr_prefetcher, te_prefetcher
 
