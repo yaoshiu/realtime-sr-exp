@@ -288,18 +288,38 @@ class RT4KSR_Rep(nn.Module):
         return out
 
 
+def rt4ksr_rep(**kwargs):
+    act = activation("gelu")
+    model = RT4KSR_Rep(
+        num_channels=3,
+        num_feats=24,
+        num_blocks=4,
+        upscale=2,
+        act=act,
+        eca_gamma=0,
+        forget=False,
+        is_train=True,
+        layernorm=True,
+        residual=False,
+    )
+
+    model = nn.DataParallel(model)
+
+    return model
+
+
 def rt4ksr_x2(**kwargs):
     act = activation("gelu")
     model = RT4KSR_Rep(
-            num_channels=1,
-            num_feats=24,
-            num_blocks=4,
-            upscale=2,
-            act=act,
-            eca_gamma=0,
-            forget=False,
-            is_train=True,
-            layernorm=True,
-            residual=False,
-        )
+        num_channels=1,
+        num_feats=24,
+        num_blocks=4,
+        upscale=2,
+        act=act,
+        eca_gamma=0,
+        forget=False,
+        is_train=True,
+        layernorm=True,
+        residual=False,
+    )
     return model

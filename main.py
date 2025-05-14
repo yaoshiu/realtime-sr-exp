@@ -44,6 +44,13 @@ def espcn_x2(
 
         sr_y_tensor = sr_model(lr_y_tensor)
 
+        sr_y_tensor = F.interpolate(
+            sr_y_tensor,
+            scale_factor=upscale_factor / 2,
+            mode="bilinear",
+            align_corners=False,
+        )
+
         sr_ycbcr_tensor = torch.cat([sr_y_tensor, bic_cb_tensor, bic_cr_tensor], dim=1)
 
         result = ycbcr_to_rgb_torch(sr_ycbcr_tensor).clamp_(0.0, 1.0)
@@ -79,13 +86,12 @@ def fsrcnn_x2(
 
         sr_y_tensor = sr_model(lr_y_tensor)
 
-        if upscale_factor != 2:
-            sr_y_tensor = F.interpolate(
-                sr_y_tensor,
-                scale_factor=upscale_factor / 2,
-                mode="bilinear",
-                align_corners=False,
-            )
+        sr_y_tensor = F.interpolate(
+            sr_y_tensor,
+            scale_factor=upscale_factor / 2,
+            mode="bilinear",
+            align_corners=False,
+        )
 
         sr_ycbcr_tensor = torch.cat([sr_y_tensor, bic_cb_tensor, bic_cr_tensor], dim=1)
 
@@ -94,7 +100,7 @@ def fsrcnn_x2(
         return result
 
 
-def rt4ksr_x2(
+def rt4ksr_rep(
     sr_model: Callable[[torch.Tensor], torch.Tensor],
     frame: np.ndarray,
     upscale_factor: float,
@@ -107,13 +113,12 @@ def rt4ksr_x2(
 
         result = sr_model(rgb_tensor).clamp_(0.0, 1.0)
 
-        if upscale_factor != 2:
-            result = F.interpolate(
-                result,
-                scale_factor=upscale_factor / 2,
-                mode="bilinear",
-                align_corners=False,
-            )
+        result = F.interpolate(
+            result,
+            scale_factor=upscale_factor / 2,
+            mode="bilinear",
+            align_corners=False,
+        )
 
         return result
 
@@ -126,7 +131,7 @@ def main(args):
     checkpoint = torch.load(
         args.model_weights_path, map_location=lambda storage, _: storage
     )
-    sr_model.load_state_dict(checkpoint["state_dict"], strict=False)
+    sr_model.load_state_dict(checkpoint["state_dict"], strict=True)
 
     if not isinstance(sr_model, nn.Module):
         print("Error: Failed to load model.")
@@ -145,7 +150,6 @@ def main(args):
     upscale_factor = args.upscale_factor
 
     init = time.perf_counter()
-    last_time = 0
     frames = 0
 
     while True:
@@ -169,17 +173,33 @@ def main(args):
 
         frames += 1
 
-        current = time.perf_counter()
-        if current - last_time >= 1:
-            print(f"FPS: {frames / (current - last_time):.2f}")
-            print(f"Delay: {current - init - src_time / 1000:.4f}")
-            frames = 0
-            last_time = current
-
         cudacanvas.im_show(sr_frame.squeeze_(0))
 
         if cudacanvas.should_close():
             break
+
+    avg_frames = frames / (time.perf_counter() - init)
+    print(f"Average FPS: {avg_frames:.2f}")
+
+    hr = cv2.imread(args.image_hr)
+    lr = cv2.imread(args.image_lr)
+
+    sr = globals()[args.model_arch_name](sr_model, lr, upscale_factor, device)
+
+    hr = image_to_tensor(hr, device, half=True)
+    hr = bgr_to_rgb_torch(hr).clamp_(0.0, 1.0)
+
+    psnr_model = PSNR(0, False)
+    ssim_model = SSIM(0, False)
+
+    psnr_metrics = psnr_model(sr, hr)
+    ssim_metrics = ssim_model(sr, hr)
+
+    psnr = psnr_metrics.item()
+    ssim = ssim_metrics.item()
+
+    print(f"PSNR: {psnr:.2f} dB")
+    print(f"SSIM: {ssim:.4f}")
 
     cap.release()
     cudacanvas.clean_up()
@@ -189,8 +209,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Super-Resolution on video stream.")
     parser.add_argument("--max_delay", type=float, default=0.02)
     parser.add_argument("--model_arch_name", type=str, default="fsrcnn_x2")
-    parser.add_argument("--upscale_factor", type=float, default=2)
-    parser.add_argument("--input_video_path", type=str, default="./data/LR/fh4.avi")
+    parser.add_argument("--upscale_factor", type=float, default=1.5)
+    parser.add_argument(
+        "--input_video_path", type=str, default="./data/validate/video.mov"
+    )
+    parser.add_argument("--image_hr", type=str, default="./data/validate/HR.png")
+    parser.add_argument("--image_lr", type=str, default="./data/validate/LR.png")
     parser.add_argument(
         "--model_weights_path",
         type=str,

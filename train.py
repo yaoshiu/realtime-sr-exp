@@ -1,37 +1,50 @@
+from glob import glob
 import os
 import shutil
 import time
 
 import argparse
+from sklearn.model_selection import train_test_split
 import torch
 from torch import amp, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.nn import DataParallel
-from dataset import CUDAPrefetcher, VideoFrameDataset
+from dataset import CUDAPrefetcher, ImageDataset
 from utils import *
 
 
 def load_dataset(
-    lr_dir: str,
-    hr_dir: str,
+    image_dir: str,
     *,
-    device: torch.device | str = "cpu",
+    device: torch.device,
+    upscale_factor: float,
     split=0.8,
-    batch_size=32,
-    num_workers=16,
+    batch_size=16,
+    num_workers=4,
 ):
-    tr_set = VideoFrameDataset(
-        lr_dir=lr_dir,
-        hr_dir=hr_dir,
-        mode="train",
-        split=split,
+    tr_paths, te_paths = train_test_split(
+        glob(os.path.join(image_dir, "*.png")),
+        test_size=1 - split,
+        random_state=42,
+        shuffle=True,
+        stratify=None,
     )
-    te_set = VideoFrameDataset(
-        lr_dir=lr_dir,
-        hr_dir=hr_dir,
+
+    tr_set = ImageDataset(
+        tr_paths,
+        crop_size=int(256 * upscale_factor),
+        upscale_factor=upscale_factor,
+        device=device,
+        mode="train",
+    )
+
+    te_set = ImageDataset(
+        te_paths,
+        crop_size=int(256 * upscale_factor),
+        upscale_factor=upscale_factor,
+        device=device,
         mode="test",
-        split=split,
     )
 
     tr_loader = DataLoader(
@@ -40,7 +53,7 @@ def load_dataset(
         shuffle=True,
         num_workers=num_workers,
         drop_last=True,
-        pin_memory=True,
+        # pin_memory=True,
         persistent_workers=True,
     )
     te_loader = DataLoader(
@@ -49,7 +62,7 @@ def load_dataset(
         shuffle=False,
         num_workers=num_workers,
         drop_last=False,
-        pin_memory=True,
+        # pin_memory=True,
         persistent_workers=True,
     )
 
@@ -58,7 +71,6 @@ def load_dataset(
 
 def train(
     model: torch.nn.Module,
-    device: torch.device,
     train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
@@ -86,17 +98,11 @@ def train(
     end = time.time()
 
     for lr, hr in train_loader:
-        lr = lr.to(device)
-        hr = hr.to(device)
-
         data_time.update(time.time() - end)
 
         model.zero_grad()
 
         with amp.autocast_mode.autocast("cuda"):
-            lr = bgr_to_y_torch(lr)
-            hr = bgr_to_y_torch(hr)
-
             sr = model(lr)
             if upscale_factor != 2:
                 sr = F.interpolate(
@@ -127,7 +133,6 @@ def train(
 
 def validate(
     model: torch.nn.Module,
-    device: torch.device,
     valid_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     psnr_model: PSNR,
     ssim_model: SSIM,
@@ -154,13 +159,7 @@ def validate(
 
     with torch.no_grad():
         for lr, hr in valid_loader:
-            lr = lr.to(device)
-            hr = hr.to(device)
-
             with amp.autocast_mode.autocast("cuda"):
-                lr = bgr_to_ycbcr_torch(lr)
-                hr = bgr_to_ycbcr_torch(hr)
-
                 lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
 
                 sr_cb = F.interpolate(
@@ -225,7 +224,9 @@ def main(args):
     model = model.to(device=device)
     print(f"Build `{args.model_arch_name}` model successfully.")
 
-    train_loader, test_loader = load_dataset(args.lr_dir, args.hr_dir)
+    train_loader, test_loader = load_dataset(
+        args.image_dir, device=device, upscale_factor=args.upscale_factor
+    )
     print("Load datasets successfully.")
 
     criterion = torch.nn.MSELoss().to(device=device)
@@ -289,7 +290,6 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         train(
             model,
-            device,
             train_loader,
             criterion,
             optimizer,
@@ -300,7 +300,6 @@ def main(args):
         )
         psnr, ssim = validate(
             model,
-            device,
             test_loader,
             psnr_model,
             ssim_model,
@@ -352,8 +351,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a super-resolution model.")
-    parser.add_argument("--lr_dir", type=str, default="./data/LR")
-    parser.add_argument("--hr_dir", type=str, default="./data/HR")
+    parser.add_argument("--image_dir", type=str, default="./data/HR")
     parser.add_argument("--samples_dir", type=str, default="./samples")
     parser.add_argument("--results_dir", type=str, default="./results")
     parser.add_argument("--epochs", type=int, default=3000)

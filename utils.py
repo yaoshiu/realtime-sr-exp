@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Optional
 import cv2
 import torch
 import torch.nn as nn
@@ -29,9 +30,9 @@ def bgr_to_y_torch(bgr_tensor: torch.Tensor):
 
     bias = 16.0
 
-    y_tensor = (torch.matmul(bgr_tensor.permute(0, 2, 3, 1), weight)).permute(
-        0, 3, 1, 2
-    ) + bias
+    y_tensor = (
+        torch.matmul(bgr_tensor.permute(0, 2, 3, 1), weight).permute(0, 3, 1, 2) + bias
+    )
 
     return y_tensor / 255.0
 
@@ -48,9 +49,9 @@ def bgr_to_ycbcr_torch(bgr_tensor: torch.Tensor):
 
     bias = torch.tensor([16, 128, 128]).view(1, 3, 1, 1).to(bgr_tensor)
 
-    ycbcr_tensor = (torch.matmul(bgr_tensor.permute(0, 2, 3, 1), weight)).permute(
-        0, 3, 1, 2
-    ) + bias
+    ycbcr_tensor = (
+        torch.matmul(bgr_tensor.permute(0, 2, 3, 1), weight).permute(0, 3, 1, 2) + bias
+    )
 
     return ycbcr_tensor / 255.0
 
@@ -61,9 +62,9 @@ def rgb_to_y_torch(rgb_tensor: torch.Tensor):
 
     bias = 16.0
 
-    y_tensor = (torch.matmul(rgb_tensor.permute(0, 2, 3, 1), weight)).permute(
-        0, 3, 1, 2
-    ) + bias
+    y_tensor = (
+        torch.matmul(rgb_tensor.permute(0, 2, 3, 1), weight).permute(0, 3, 1, 2) + bias
+    )
 
     return y_tensor / 255.0
 
@@ -80,9 +81,9 @@ def rgb_to_ycbcr_torch(rgb_tensor: torch.Tensor):
 
     bias = torch.tensor([16, 128, 128]).view(1, 3, 1, 1).to(rgb_tensor)
 
-    ycbcr_tensor = (torch.matmul(rgb_tensor.permute(0, 2, 3, 1), weight)).permute(
-        0, 3, 1, 2
-    ) + bias
+    ycbcr_tensor = (
+        torch.matmul(rgb_tensor.permute(0, 2, 3, 1), weight).permute(0, 3, 1, 2) + bias
+    )
 
     return ycbcr_tensor / 255.0
 
@@ -104,9 +105,10 @@ def ycbcr_to_bgr_torch(ycbcr_tensor: torch.Tensor):
         / 255.0
     )
 
-    bgr_tensor = (torch.matmul(ycbcr_tensor.permute(0, 2, 3, 1), weight)).permute(
-        0, 3, 1, 2
-    ) + bias
+    bgr_tensor = (
+        torch.matmul(ycbcr_tensor.permute(0, 2, 3, 1), weight).permute(0, 3, 1, 2)
+        + bias
+    )
 
     return bgr_tensor
 
@@ -128,9 +130,10 @@ def ycbcr_to_rgb_torch(ycbcr_tensor: torch.Tensor):
         / 255.0
     )
 
-    rgb_tensor = (torch.matmul(ycbcr_tensor.permute(0, 2, 3, 1), weight)).permute(
-        0, 3, 1, 2
-    ) + bias
+    rgb_tensor = (
+        torch.matmul(ycbcr_tensor.permute(0, 2, 3, 1), weight).permute(0, 3, 1, 2)
+        + bias
+    )
 
     return rgb_tensor
 
@@ -142,11 +145,8 @@ def bgr_to_rgb_torch(bgr_tensor: torch.Tensor):
     return rgb_tensor
 
 
-def image_to_tensor(image: np.ndarray, device: torch.device | None = None, half=False):
+def image_to_tensor(image: np.ndarray, device: torch.device | str = "cpu", half=False):
     tensor = torch.from_numpy(image).to(device).permute(2, 0, 1).float() / 255.0
-
-    if device:
-        tensor = tensor.to(device)
 
     tensor = tensor.unsqueeze_(0)
 

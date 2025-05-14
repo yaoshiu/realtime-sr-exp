@@ -1,85 +1,70 @@
-import glob
 from typing import Generic, TypeVar
 import numpy as np
 import torch
 import cv2
 from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
 
-from utils import image_to_tensor
+from utils import bgr_to_y_torch, bgr_to_ycbcr_torch, image_to_tensor
 
 
-class VideoFrameDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+class ImageDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __init__(
         self,
-        lr_dir: str,
-        hr_dir: str,
-        mode="train",
-        frame_step=1,
-        split=0.8,
+        image_paths: list[str],
+        crop_size: int,
+        upscale_factor: float,
+        device: torch.device | str = "cpu",
+        mode: str = "train",
     ):
-        lr_paths = sorted(glob.glob(f"{lr_dir}/*"))
-        hr_paths = sorted(glob.glob(f"{hr_dir}/*"))
-
-        assert len(lr_paths) == len(hr_paths), "Mismatch between LR and HR images."
-        assert len(lr_paths) > 0, "No images found in the specified directories."
-
+        super().__init__()
+        self.image_paths = image_paths
+        self.crop_size = crop_size
+        self.upscale_factor = upscale_factor
         self.mode = mode
-        self.samples = []
-        self.paths = list(zip(lr_paths, hr_paths))
+        self.device = device
 
-        for vid_idx, (lr_path, hr_path) in enumerate(self.paths):
-            lr_decoder = cv2.VideoCapture(lr_path)
-            hr_decoder = cv2.VideoCapture(hr_path)
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        image_path = self.image_paths[index]
+        hr = cv2.imread(image_path)
 
-            lr_frames = int(lr_decoder.get(cv2.CAP_PROP_FRAME_COUNT))
-            hr_frames = int(hr_decoder.get(cv2.CAP_PROP_FRAME_COUNT))
+        h, w, _ = hr.shape
 
-            lr_decoder.release()
-            hr_decoder.release()
+        if h < self.crop_size or w < self.crop_size:
+            raise ValueError("Image is smaller than crop size")
 
-            n = min(lr_frames, hr_frames)
+        hr = image_to_tensor(hr, self.device)
 
-            if mode == "train":
-                start, end = 0, int(n * split)
-            else:
-                start, end = int(n * split), n
+        if self.mode == "train":
+            # Randomly crop the image
+            x = np.random.randint(0, w - self.crop_size)
+            y = np.random.randint(0, h - self.crop_size)
 
-            for f in range(start, end, frame_step):
-                self.samples.append((vid_idx, f))
+            hr = hr[:, :, y : y + self.crop_size, x : x + self.crop_size]
 
-    def __len__(self):
-        return len(self.samples)
+        else:
+            # Center crop the image
+            x = (w - self.crop_size) // 2
+            y = (h - self.crop_size) // 2
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        vid_idx, frm_idx = self.samples[idx]
+            hr = hr[:, :, y : y + self.crop_size, x : x + self.crop_size]
 
-        lr, hr = self._grab_frame(vid_idx, frm_idx)
+        hr = bgr_to_y_torch(hr)
 
-        lr = image_to_tensor(lr).squeeze_(0)
-        hr = image_to_tensor(hr).squeeze_(0)
+        lr = F.interpolate(
+            hr,
+            scale_factor=1 / self.upscale_factor,
+            mode="bilinear",
+            align_corners=False,
+        )
 
-        return lr, hr
-
-    def _grab_frame(self, vid_idx: int, frm_idx: int) -> tuple[np.ndarray, np.ndarray]:
-        lr_path, hr_path = self.paths[vid_idx]
-
-        lr_decoder = cv2.VideoCapture(lr_path)
-        hr_decoder = cv2.VideoCapture(hr_path)
-
-        lr_decoder.set(cv2.CAP_PROP_POS_FRAMES, frm_idx)
-        ret_lr, lr = lr_decoder.read()
-        if not ret_lr:
-            raise RuntimeError(f"Failed to read frame {frm_idx} from video {vid_idx}")
-
-        hr_decoder.set(cv2.CAP_PROP_POS_FRAMES, frm_idx)
-        ret_hr, hr = hr_decoder.read()
-        if not ret_hr:
-            raise RuntimeError(f"Failed to read frame {frm_idx} from video {vid_idx}")
-
-        lr_decoder.release()
-        hr_decoder.release()
+        lr = lr.squeeze_(0)
+        hr = hr.squeeze_(0)
 
         return lr, hr
+
+    def __len__(self) -> int:
+        return len(self.image_paths)
 
 
 T = TypeVar("T")
