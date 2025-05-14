@@ -16,38 +16,14 @@ from utils import *
 from torch.profiler import profile, ProfilerActivity
 
 
-def random_crop(
-    image: torch.Tensor,
-    crop_size: int,
-) -> torch.Tensor:
-    _, _, h, w = image.size()
-
-    top = torch.randint(0, h - crop_size + 1, (1,)).item()
-    left = torch.randint(0, w - crop_size + 1, (1,)).item()
-
-    return image[:, :, top : top + crop_size, left : left + crop_size]
-
-
-def center_crop(
-    image: torch.Tensor,
-    crop_size: int,
-) -> torch.Tensor:
-    _, h, w = image.size()
-
-    top = (h - crop_size) // 2
-    left = (w - crop_size) // 2
-
-    return image[:, top : top + crop_size, left : left + crop_size]
-
-
 def load_dataset(
     image_dir: str,
     *,
     device: torch.device | str,
     upscale_factor: float,
     split=0.8,
-    batch_size=16,
-    num_workers=4,
+    batch_size=64,
+    num_workers=12,
 ):
     tr_paths, te_paths = train_test_split(
         glob(os.path.join(image_dir, "*.png")),
@@ -60,11 +36,15 @@ def load_dataset(
     tr_set = ImageDataset(
         tr_paths,
         upscale_factor=upscale_factor,
+        crop_size=int(256 * upscale_factor),
+        mode="train",
     )
 
     te_set = ImageDataset(
         te_paths,
         upscale_factor=upscale_factor,
+        crop_size=int(256 * upscale_factor),
+        mode="test",
     )
 
     tr_loader = DataLoader(
@@ -88,12 +68,10 @@ def load_dataset(
 
     tr_prefetcher = CUDAPrefetcher(
         tr_loader,
-        preprocess=partial(random_crop, crop_size=int(256 * upscale_factor)),
         device=device,
     )
     te_prefetcher = CUDAPrefetcher(
         te_loader,
-        preprocess=partial(center_crop, crop_size=int(256 * upscale_factor)),
         device=device,
     )
 
@@ -134,6 +112,8 @@ def train(
     while batch_data is not None:
         hr = batch_data
 
+        data_time.update(time.time() - end)
+
         hr = bgr_to_y_torch(hr)
 
         lr = F.interpolate(
@@ -142,8 +122,6 @@ def train(
             mode="bilinear",
             align_corners=False,
         )
-
-        data_time.update(time.time() - end)
 
         model.zero_grad()
 

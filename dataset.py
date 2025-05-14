@@ -1,4 +1,3 @@
-from typing import Callable
 import numpy as np
 import torch
 import cv2
@@ -12,14 +11,32 @@ class ImageDataset(Dataset[torch.Tensor]):
         self,
         image_paths: list[str],
         upscale_factor: float,
+        crop_size: int,
+        mode: str = "train",
     ):
         super().__init__()
         self.image_paths = image_paths
         self.upscale_factor = upscale_factor
+        self.crop_size = crop_size
+        self.mode = mode
 
     def __getitem__(self, index: int) -> torch.Tensor:
         image_path = self.image_paths[index]
         hr = cv2.imread(image_path)
+
+        h, w, _ = hr.shape
+
+        if self.mode == "train":
+            # Randomly crop the image
+            x = np.random.randint(0, w - self.crop_size)
+            y = np.random.randint(0, h - self.crop_size)
+            hr = hr[y : y + self.crop_size, x : x + self.crop_size]
+
+        else:
+            # Center crop the image
+            x = (w - self.crop_size) // 2
+            y = (h - self.crop_size) // 2
+            hr = hr[y : y + self.crop_size, x : x + self.crop_size]
 
         hr = image_to_tensor(hr)
 
@@ -33,13 +50,11 @@ class CUDAPrefetcher:
     def __init__(
         self,
         dataloader: DataLoader[torch.Tensor],
-        preprocess: Callable[[torch.Tensor], torch.Tensor],
         device: torch.device | str,
     ):
         self.batch_data = None
         self.original_dataloader = dataloader
         self.device = device
-        self.preprocess = preprocess
 
         self.data = iter(dataloader)
         self.stream = torch.cuda.Stream()
@@ -59,8 +74,6 @@ class CUDAPrefetcher:
     def next(self) -> torch.Tensor | None:
         torch.cuda.current_stream().wait_stream(self.stream)
         batch_data = self.batch_data
-        if torch.is_tensor(batch_data):
-            batch_data = self.preprocess(batch_data)
         self.preload()
         return batch_data
 
