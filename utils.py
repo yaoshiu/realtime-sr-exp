@@ -145,13 +145,8 @@ def bgr_to_rgb_torch(bgr_tensor: torch.Tensor):
     return rgb_tensor
 
 
-def image_to_tensor(image: np.ndarray, device: torch.device | str = "cpu", half=False):
+def image_to_tensor(image: np.ndarray, device: torch.device | str = "cpu"):
     tensor = torch.from_numpy(image).to(device).permute(2, 0, 1).float() / 255.0
-
-    tensor = tensor.unsqueeze_(0)
-
-    if half:
-        tensor = tensor.half()
 
     return tensor
 
@@ -475,7 +470,7 @@ class SSIM(nn.Module):
 
         gaussian_kernel = cv2.getGaussianKernel(window_size, gaussian_sigma)
         self.gaussian_kernel_window = np.outer(
-            gaussian_kernel, gaussian_kernel.transpose()
+            gaussian_kernel, gaussian_kernel.transpose()  # type: ignore
         )
 
     def forward(

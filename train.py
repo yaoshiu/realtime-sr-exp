@@ -10,18 +10,19 @@ from torch import amp, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.nn import DataParallel
-from dataset import CUDAPrefetcher, ImageDataset
+from dataset import ImageDataset, CUDAPrefetcher
 from utils import *
+from torch.profiler import profile, ProfilerActivity
 
 
 def load_dataset(
     image_dir: str,
     *,
-    device: torch.device,
+    device: torch.device | str,
     upscale_factor: float,
     split=0.8,
-    batch_size=16,
-    num_workers=4,
+    batch_size=64,
+    num_workers=12,
 ):
     tr_paths, te_paths = train_test_split(
         glob(os.path.join(image_dir, "*.png")),
@@ -35,7 +36,6 @@ def load_dataset(
         tr_paths,
         crop_size=int(256 * upscale_factor),
         upscale_factor=upscale_factor,
-        device=device,
         mode="train",
     )
 
@@ -43,7 +43,6 @@ def load_dataset(
         te_paths,
         crop_size=int(256 * upscale_factor),
         upscale_factor=upscale_factor,
-        device=device,
         mode="test",
     )
 
@@ -53,7 +52,7 @@ def load_dataset(
         shuffle=True,
         num_workers=num_workers,
         drop_last=True,
-        # pin_memory=True,
+        pin_memory=True,
         persistent_workers=True,
     )
     te_loader = DataLoader(
@@ -62,16 +61,18 @@ def load_dataset(
         shuffle=False,
         num_workers=num_workers,
         drop_last=False,
-        # pin_memory=True,
+        pin_memory=True,
         persistent_workers=True,
     )
+    tr_prefetcher = CUDAPrefetcher(tr_loader, device=device)
+    te_prefetcher = CUDAPrefetcher(te_loader, device=device)
 
-    return tr_loader, te_loader
+    return tr_prefetcher, te_prefetcher
 
 
 def train(
     model: torch.nn.Module,
-    train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    train_loader: CUDAPrefetcher,
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
     upscale_factor: float,
@@ -97,7 +98,21 @@ def train(
 
     end = time.time()
 
-    for lr, hr in train_loader:
+    train_loader.reset()
+    batch_data = train_loader.next()
+
+    while batch_data is not None:
+        hr = batch_data
+
+        hr = bgr_to_y_torch(hr)
+
+        lr = F.interpolate(
+            hr,
+            scale_factor=1 / upscale_factor,
+            mode="bilinear",
+            align_corners=False,
+        )
+
         data_time.update(time.time() - end)
 
         model.zero_grad()
@@ -130,10 +145,12 @@ def train(
 
         batch_index += 1
 
+        batch_data = train_loader.next()
+
 
 def validate(
     model: torch.nn.Module,
-    valid_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    valid_loader: CUDAPrefetcher,
     psnr_model: PSNR,
     ssim_model: SSIM,
     epoch: int,
@@ -157,8 +174,22 @@ def validate(
 
     end = time.time()
 
+    valid_loader.reset()
+    batch_data = valid_loader.next()
+
     with torch.no_grad():
-        for lr, hr in valid_loader:
+        while batch_data is not None:
+            hr = batch_data
+
+            hr = bgr_to_ycbcr_torch(hr)
+
+            lr = F.interpolate(
+                hr,
+                scale_factor=1 / upscale_factor,
+                mode="bilinear",
+                align_corners=False,
+            )
+
             with amp.autocast_mode.autocast("cuda"):
                 lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
 
@@ -190,8 +221,8 @@ def validate(
             psnr = psnr_model(sr, hr)
             ssim = ssim_model(sr, hr)
 
-            psnres.update(psnr.item(), lr.size(0))
-            ssimes.update(ssim.item(), lr.size(0))
+            psnres.update(psnr.mean().item(), lr.size(0))
+            ssimes.update(ssim.mean().item(), lr.size(0))
 
             batch_time.update(time.time() - end)
             end = time.time()
@@ -200,6 +231,8 @@ def validate(
                 progress.display(batch_index + 1)
 
             batch_index += 1
+
+            batch_data = valid_loader.next()
 
     progress.display_summary()
 
@@ -355,7 +388,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples_dir", type=str, default="./samples")
     parser.add_argument("--results_dir", type=str, default="./results")
     parser.add_argument("--epochs", type=int, default=3000)
-    parser.add_argument("--upscale_factor", type=float, default=1.5)
+    parser.add_argument("--upscale_factor", type=float, default=2)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--model_weights_path", type=str, default=None)
     parser.add_argument("--model_milestones", type=list, default=[300, 2400])
