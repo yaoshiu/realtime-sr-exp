@@ -1,4 +1,3 @@
-from functools import partial
 from glob import glob
 import os
 import shutil
@@ -13,7 +12,6 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from torch.nn import DataParallel
 from dataset import ImageDataset, CUDAPrefetcher
 from utils import *
-from torch.profiler import profile, ProfilerActivity
 
 
 def load_dataset(
@@ -23,7 +21,7 @@ def load_dataset(
     upscale_factor: float,
     split=0.8,
     batch_size=64,
-    num_workers=12,
+    num_workers=24,
 ):
     tr_paths, te_paths = train_test_split(
         glob(os.path.join(image_dir, "*.png")),
@@ -114,18 +112,18 @@ def train(
 
         data_time.update(time.time() - end)
 
-        hr = bgr_to_y_torch(hr)
-
-        lr = F.interpolate(
-            hr,
-            scale_factor=1 / upscale_factor,
-            mode="bilinear",
-            align_corners=False,
-        )
-
         model.zero_grad()
 
         with amp.autocast_mode.autocast("cuda"):
+            hr = bgr_to_y_torch(hr)
+
+            lr = F.interpolate(
+                hr,
+                scale_factor=1 / upscale_factor,
+                mode="bilinear",
+                align_corners=False,
+            )
+
             sr = model(lr)
             if upscale_factor != 2:
                 sr = F.interpolate(
@@ -134,6 +132,7 @@ def train(
                     mode="bilinear",
                     align_corners=False,
                 )
+
             loss = criterion(sr, hr)
 
         scaler.scale(loss).backward()
