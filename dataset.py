@@ -2,21 +2,47 @@ import numpy as np
 import torch
 import cv2
 from torch.utils.data import Dataset, DataLoader
+from nvidia.dali.pipeline import pipeline_def
+import nvidia.dali.fn as fn
 
 from utils import image_to_tensor
+
+
+@pipeline_def
+def image_pipeline(
+    image_paths: list[str],
+    crop_size: int,
+    mode: str = "train",
+):
+    pngs, _ = fn.readers.file(name="Reader", files=image_paths)
+
+    if mode == "train":
+        pos_x = fn.random.uniform(range=(0.0, 1.0))
+        pos_y = fn.random.uniform(range=(0.0, 1.0))
+    else:
+        pos_x = 0.5
+        pos_y = 0.5
+
+    images = fn.decoders.image_crop(
+        pngs,
+        crop=(crop_size, crop_size),
+        crop_pos_x=pos_x,
+        crop_pos_y=pos_y,
+        device="mixed",
+    )
+
+    return images
 
 
 class ImageDataset(Dataset[torch.Tensor]):
     def __init__(
         self,
         image_paths: list[str],
-        upscale_factor: float,
         crop_size: int,
         mode: str = "train",
     ):
         super().__init__()
         self.image_paths = image_paths
-        self.upscale_factor = upscale_factor
         self.crop_size = crop_size
         self.mode = mode
 

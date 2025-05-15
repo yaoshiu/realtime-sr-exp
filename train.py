@@ -10,7 +10,8 @@ from torch import amp, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.nn import DataParallel
-from dataset import ImageDataset, CUDAPrefetcher
+from dataset import ImageDataset, CUDAPrefetcher, image_pipeline
+from nvidia.dali.plugin.pytorch import DALIGenericIterator
 from utils import *
 
 
@@ -20,8 +21,8 @@ def load_dataset(
     device: torch.device | str,
     upscale_factor: float,
     split=0.8,
-    batch_size=64,
-    num_workers=24,
+    batch_size=32,
+    num_workers=8,
 ):
     tr_paths, te_paths = train_test_split(
         glob(os.path.join(image_dir, "*.png")),
@@ -31,16 +32,46 @@ def load_dataset(
         stratify=None,
     )
 
+    tr_pipeline = image_pipeline(
+        image_paths=tr_paths,
+        crop_size=int(256 * upscale_factor),
+        mode="train",
+        batch_size=batch_size,
+        num_threads=num_workers,
+    )
+    te_pipeline = image_pipeline(
+        image_paths=te_paths,
+        crop_size=int(256 * upscale_factor),
+        mode="test",
+        batch_size=batch_size,
+        num_threads=num_workers,
+    )
+    tr_pipeline.build()
+    te_pipeline.build()
+
+    tr_loader = DALIGenericIterator(
+        tr_pipeline,
+        ["image"],
+        reader_name="Reader",
+        auto_reset=True,
+    )
+    te_loader = DALIGenericIterator(
+        te_pipeline,
+        ["image"],
+        reader_name="Reader",
+        auto_reset=True,
+    )
+
+    return tr_loader, te_loader
+
     tr_set = ImageDataset(
         tr_paths,
-        upscale_factor=upscale_factor,
         crop_size=int(256 * upscale_factor),
         mode="train",
     )
 
     te_set = ImageDataset(
         te_paths,
-        upscale_factor=upscale_factor,
         crop_size=int(256 * upscale_factor),
         mode="test",
     )
@@ -78,7 +109,7 @@ def load_dataset(
 
 def train(
     model: torch.nn.Module,
-    train_loader: CUDAPrefetcher,
+    train_loader: DALIGenericIterator,
     criterion: torch.nn.MSELoss,
     optimizer: optim.SGD,
     upscale_factor: float,
@@ -104,17 +135,22 @@ def train(
 
     end = time.time()
 
-    train_loader.reset()
-    batch_data = train_loader.next()
+    # train_loader.reset()
+    # batch_data = train_loader.next()
 
-    while batch_data is not None:
-        hr = batch_data
+    # while batch_data is not None:
+    #     hr = batch_data
+
+    for d in train_loader:
+        hr = d[0]["image"].float()
 
         data_time.update(time.time() - end)
 
         model.zero_grad()
 
         with amp.autocast_mode.autocast("cuda"):
+            hr = hr.permute(0, 3, 1, 2) / 255.0
+
             hr = bgr_to_y_torch(hr)
 
             lr = F.interpolate(
@@ -152,12 +188,12 @@ def train(
 
         batch_index += 1
 
-        batch_data = train_loader.next()
+        # batch_data = train_loader.next()
 
 
 def validate(
     model: torch.nn.Module,
-    valid_loader: CUDAPrefetcher,
+    valid_loader: DALIGenericIterator,
     psnr_model: PSNR,
     ssim_model: SSIM,
     epoch: int,
@@ -181,23 +217,27 @@ def validate(
 
     end = time.time()
 
-    valid_loader.reset()
-    batch_data = valid_loader.next()
+    # valid_loader.reset()
+    # batch_data = valid_loader.next()
 
-    with torch.no_grad():
-        while batch_data is not None:
-            hr = batch_data
-
-            hr = bgr_to_ycbcr_torch(hr)
-
-            lr = F.interpolate(
-                hr,
-                scale_factor=1 / upscale_factor,
-                mode="bilinear",
-                align_corners=False,
-            )
+    # while batch_data is not None:
+    for d in valid_loader:
+        with torch.no_grad():
+            # hr = batch_data
+            hr = d[0]["image"].float()
 
             with amp.autocast_mode.autocast("cuda"):
+                hr = hr.permute(0, 3, 1, 2) / 255.0
+
+                hr = bgr_to_ycbcr_torch(hr)
+
+                lr = F.interpolate(
+                    hr,
+                    scale_factor=1 / upscale_factor,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+
                 lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
 
                 sr_cb = F.interpolate(
@@ -239,7 +279,7 @@ def validate(
 
             batch_index += 1
 
-            batch_data = valid_loader.next()
+            # batch_data = valid_loader.next()
 
     progress.display_summary()
 
