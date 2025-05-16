@@ -468,9 +468,9 @@ class SSIM(nn.Module):
         self.only_test_y_channel = only_only_test_y_channel
         self.window_size = window_size
 
-        gaussian_kernel = cv2.getGaussianKernel(window_size, gaussian_sigma)
+        gaussian_kernel: np.ndarray = cv2.getGaussianKernel(window_size, gaussian_sigma)
         self.gaussian_kernel_window = np.outer(
-            gaussian_kernel, gaussian_kernel.transpose()  # type: ignore
+            gaussian_kernel, gaussian_kernel.transpose()
         )
 
     def forward(

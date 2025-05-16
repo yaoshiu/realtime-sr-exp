@@ -4,44 +4,40 @@ import shutil
 import time
 
 import argparse
-from sklearn.model_selection import train_test_split
 import torch
 from torch import amp, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.nn import DataParallel
-from dataset import ImageDataset, CUDAPrefetcher, image_pipeline
+from dataset import image_pipeline
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 from utils import *
 
 
 def load_dataset(
-    image_dir: str,
+    train_dir: str,
+    test_dir: str,
     *,
     device: torch.device | str,
     upscale_factor: float,
-    split=0.8,
     batch_size=32,
     num_workers=8,
 ):
-    tr_paths, te_paths = train_test_split(
-        glob(os.path.join(image_dir, "*.png")),
-        test_size=1 - split,
-        random_state=42,
-        shuffle=True,
-        stratify=None,
-    )
+    tr_paths = sorted(glob(os.path.join(train_dir, "*.tar")))
+    te_paths = sorted(glob(os.path.join(test_dir, "*.tar")))
 
     tr_pipeline = image_pipeline(
-        image_paths=tr_paths,
+        wds_paths=tr_paths,
         crop_size=int(256 * upscale_factor),
+        upscale_factor=upscale_factor,
         mode="train",
         batch_size=batch_size,
         num_threads=num_workers,
     )
     te_pipeline = image_pipeline(
-        image_paths=te_paths,
+        wds_paths=te_paths,
         crop_size=int(256 * upscale_factor),
+        upscale_factor=upscale_factor,
         mode="test",
         batch_size=batch_size,
         num_threads=num_workers,
@@ -51,13 +47,13 @@ def load_dataset(
 
     tr_loader = DALIGenericIterator(
         tr_pipeline,
-        ["image"],
+        ["hr", "lr"],
         reader_name="Reader",
         auto_reset=True,
     )
     te_loader = DALIGenericIterator(
         te_pipeline,
-        ["image"],
+        ["hr", "lr"],
         reader_name="Reader",
         auto_reset=True,
     )
@@ -142,23 +138,16 @@ def train(
     #     hr = batch_data
 
     for d in train_loader:
-        hr = d[0]["image"].float()
-
         data_time.update(time.time() - end)
 
         model.zero_grad()
 
         with amp.autocast_mode.autocast("cuda"):
-            hr = hr.permute(0, 3, 1, 2) / 255.0
+            hr = d[0]["hr"]
+            lr = d[0]["lr"]
 
-            hr = bgr_to_y_torch(hr)
-
-            lr = F.interpolate(
-                hr,
-                scale_factor=1 / upscale_factor,
-                mode="bilinear",
-                align_corners=False,
-            )
+            hr = rgb_to_y_torch(hr)
+            lr = rgb_to_y_torch(lr)
 
             sr = model(lr)
             if upscale_factor != 2:
@@ -224,19 +213,12 @@ def validate(
     for d in valid_loader:
         with torch.no_grad():
             # hr = batch_data
-            hr = d[0]["image"].float()
-
             with amp.autocast_mode.autocast("cuda"):
-                hr = hr.permute(0, 3, 1, 2) / 255.0
+                hr = d[0]["hr"]
+                lr = d[0]["lr"]
 
-                hr = bgr_to_ycbcr_torch(hr)
-
-                lr = F.interpolate(
-                    hr,
-                    scale_factor=1 / upscale_factor,
-                    mode="bilinear",
-                    align_corners=False,
-                )
+                hr = rgb_to_ycbcr_torch(hr)
+                lr = rgb_to_ycbcr_torch(lr)
 
                 lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
 
@@ -305,7 +287,7 @@ def main(args):
     print(f"Build `{args.model_arch_name}` model successfully.")
 
     train_loader, test_loader = load_dataset(
-        args.image_dir, device=device, upscale_factor=args.upscale_factor
+        args.train_dir, args.test_dir, device=device, upscale_factor=args.upscale_factor
     )
     print("Load datasets successfully.")
 
@@ -431,7 +413,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a super-resolution model.")
-    parser.add_argument("--image_dir", type=str, default="./data/HR")
+    parser.add_argument("--train_dir", type=str, default="./data/train")
+    parser.add_argument("--test_dir", type=str, default="./data/test")
     parser.add_argument("--samples_dir", type=str, default="./samples")
     parser.add_argument("--results_dir", type=str, default="./results")
     parser.add_argument("--epochs", type=int, default=3000)
