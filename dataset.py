@@ -23,11 +23,11 @@ def image_pipeline(
 
     hr, lr = read
 
-    hr = fn.decoders.image(
+    hr = fn.decoders.image_crop(
         hr,
         device="mixed",
     )
-    lr = fn.decoders.image(
+    lr = fn.decoders.image_crop(
         lr,
         device="mixed",
     )
@@ -42,19 +42,19 @@ def image_pipeline(
     hr = fn.crop_mirror_normalize(
         hr,
         dtype=types.DALIDataType.FLOAT,
+        scale=1.0 / 255.0,
         crop=(crop_size * upscale_factor, crop_size * upscale_factor),
         crop_pos_x=pos_x,
         crop_pos_y=pos_y,
-        scale=1.0 / 255.0,
         device="gpu",
     )
     lr = fn.crop_mirror_normalize(
         lr,
         dtype=types.DALIDataType.FLOAT,
+        scale=1.0 / 255.0,
         crop=(crop_size, crop_size),
         crop_pos_x=pos_x,
         crop_pos_y=pos_y,
-        scale=1.0 / 255.0,
         device="gpu",
     )
 

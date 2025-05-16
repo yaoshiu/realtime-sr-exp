@@ -18,17 +18,17 @@ def load_dataset(
     train_dir: str,
     test_dir: str,
     *,
-    device: torch.device | str,
     upscale_factor: float,
-    batch_size=16,
-    num_workers=48,
+    batch_size=64,
+    crop_size=128,
+    num_workers=12,
 ):
     tr_paths = sorted(glob(os.path.join(train_dir, "*.tar")))
     te_paths = sorted(glob(os.path.join(test_dir, "*.tar")))
 
     tr_pipeline = image_pipeline(
         wds_paths=tr_paths,
-        crop_size=int(256 * upscale_factor),
+        crop_size=crop_size,
         upscale_factor=upscale_factor,
         mode="train",
         batch_size=batch_size,
@@ -36,7 +36,7 @@ def load_dataset(
     )
     te_pipeline = image_pipeline(
         wds_paths=te_paths,
-        crop_size=int(256 * upscale_factor),
+        crop_size=crop_size,
         upscale_factor=upscale_factor,
         mode="test",
         batch_size=batch_size,
@@ -59,48 +59,6 @@ def load_dataset(
     )
 
     return tr_loader, te_loader
-
-    tr_set = ImageDataset(
-        tr_paths,
-        crop_size=int(256 * upscale_factor),
-        mode="train",
-    )
-
-    te_set = ImageDataset(
-        te_paths,
-        crop_size=int(256 * upscale_factor),
-        mode="test",
-    )
-
-    tr_loader = DataLoader(
-        tr_set,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        drop_last=True,
-        pin_memory=True,
-        persistent_workers=True,
-    )
-    te_loader = DataLoader(
-        te_set,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        drop_last=False,
-        pin_memory=True,
-        persistent_workers=True,
-    )
-
-    tr_prefetcher = CUDAPrefetcher(
-        tr_loader,
-        device=device,
-    )
-    te_prefetcher = CUDAPrefetcher(
-        te_loader,
-        device=device,
-    )
-
-    return tr_prefetcher, te_prefetcher
 
 
 def train(
@@ -287,7 +245,7 @@ def main(args):
     print(f"Build `{args.model_arch_name}` model successfully.")
 
     train_loader, test_loader = load_dataset(
-        args.train_dir, args.test_dir, device=device, upscale_factor=args.upscale_factor
+        args.train_dir, args.test_dir, upscale_factor=args.upscale_factor
     )
     print("Load datasets successfully.")
 
