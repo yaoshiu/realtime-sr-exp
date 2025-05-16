@@ -86,12 +86,6 @@ def train(
 
     end = time.time()
 
-    # train_loader.reset()
-    # batch_data = train_loader.next()
-
-    # while batch_data is not None:
-    #     hr = batch_data
-
     for d in train_loader:
         data_time.update(time.time() - end)
 
@@ -132,8 +126,6 @@ def train(
 
         batch_index += 1
 
-        # batch_data = train_loader.next()
-
 
 def validate(
     model: torch.nn.Module,
@@ -161,13 +153,8 @@ def validate(
 
     end = time.time()
 
-    # valid_loader.reset()
-    # batch_data = valid_loader.next()
-
-    # while batch_data is not None:
     for d in valid_loader:
         with torch.no_grad():
-            # hr = batch_data
             with amp.autocast_mode.autocast("cuda"):
                 hr = d[0]["hr"]
                 lr = d[0]["lr"]
@@ -215,8 +202,6 @@ def validate(
                 progress.display(batch_index + 1)
 
             batch_index += 1
-
-            # batch_data = valid_loader.next()
 
     progress.display_summary()
 
