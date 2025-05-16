@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import cv2
 from torch import nn
+from torch import amp
 from torch.nn import functional as F
 
 import cudacanvas
@@ -22,7 +23,7 @@ def espcn_x2(
     upscale_factor: float,
     device: torch.device,
 ):
-    tensor = image_to_tensor(frame, device, half=True)
+    tensor = image_to_tensor(frame, device)
 
     with torch.no_grad():
         ycbcr_tensor = bgr_to_ycbcr_torch(tensor)
@@ -64,7 +65,7 @@ def fsrcnn_x2(
     upscale_factor: float,
     device: torch.device,
 ):
-    tensor = image_to_tensor(frame, device, half=True)
+    tensor = image_to_tensor(frame, device)
 
     with torch.no_grad():
         ycbcr_tensor = bgr_to_ycbcr_torch(tensor)
@@ -106,7 +107,7 @@ def rt4ksr_rep(
     upscale_factor: float,
     device: torch.device,
 ):
-    tensor = image_to_tensor(frame, device, half=True)
+    tensor = image_to_tensor(frame, device)
 
     with torch.no_grad():
         rgb_tensor = bgr_to_rgb_torch(tensor)
@@ -137,7 +138,6 @@ def main(args):
         print("Error: Failed to load model.")
         return
 
-    sr_model.half()
     sr_model.eval()
 
     cap = cv2.VideoCapture(args.input_video_path)
@@ -167,9 +167,10 @@ def main(args):
         if delay < 0:
             time.sleep(-delay)
 
-        sr_frame = globals()[args.model_arch_name](
-            sr_model, frame, upscale_factor, device
-        )
+        with amp.autocast_mode.autocast(args.device):
+            sr_frame = globals()[args.model_arch_name](
+                sr_model, frame, upscale_factor, device
+            )
 
         frames += 1
 
@@ -186,7 +187,7 @@ def main(args):
 
     sr = globals()[args.model_arch_name](sr_model, lr, upscale_factor, device)
 
-    hr = image_to_tensor(hr, device, half=True)
+    hr = image_to_tensor(hr, device)
     hr = bgr_to_rgb_torch(hr).clamp_(0.0, 1.0)
 
     psnr_model = PSNR(0, False)

@@ -20,7 +20,7 @@ def load_dataset(
     upscale_factor: float,
     batch_size=64,
     crop_size=128,
-    num_workers=12,
+    num_workers=24,
 ):
     tr_paths = sorted(glob(os.path.join(train_dir, "*.tar")))
     te_paths = sorted(glob(os.path.join(test_dir, "*.tar")))
@@ -370,8 +370,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a super-resolution model.")
-    parser.add_argument("--train_dir", type=str, default="./data/train")
-    parser.add_argument("--test_dir", type=str, default="./data/test")
+    parser.add_argument("--train_dir", type=str, default="/dev/shm/train")
+    parser.add_argument("--test_dir", type=str, default="/dev/shm/test")
     parser.add_argument("--samples_dir", type=str, default="./samples")
     parser.add_argument("--results_dir", type=str, default="./results")
     parser.add_argument("--epochs", type=int, default=3000)
