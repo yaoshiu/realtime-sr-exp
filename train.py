@@ -20,8 +20,8 @@ def load_dataset(
     *,
     device: torch.device | str,
     upscale_factor: float,
-    batch_size=32,
-    num_workers=8,
+    batch_size=16,
+    num_workers=48,
 ):
     tr_paths = sorted(glob(os.path.join(train_dir, "*.tar")))
     te_paths = sorted(glob(os.path.join(test_dir, "*.tar")))

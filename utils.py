@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import Optional
 import cv2
 import torch
 import torch.nn as nn
