@@ -18,9 +18,9 @@ def load_dataset(
     test_dir: str,
     *,
     upscale_factor: float,
-    batch_size=64,
+    batch_size=96,
     crop_size=128,
-    num_workers=24,
+    num_workers=32,
 ):
     tr_paths = sorted(glob(os.path.join(train_dir, "*.tar")))
     te_paths = sorted(glob(os.path.join(test_dir, "*.tar")))
@@ -48,13 +48,11 @@ def load_dataset(
         tr_pipeline,
         ["hr", "lr"],
         reader_name="Reader",
-        auto_reset=True,
     )
     te_loader = DALIGenericIterator(
         te_pipeline,
         ["hr", "lr"],
         reader_name="Reader",
-        auto_reset=True,
     )
 
     return tr_loader, te_loader
