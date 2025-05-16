@@ -6,7 +6,6 @@ import time
 import argparse
 import torch
 from torch import amp, optim
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.nn import DataParallel
 from dataset import image_pipeline
