@@ -1,7 +1,8 @@
-import numpy as np
 from nvidia.dali.pipeline import pipeline_def
 import nvidia.dali.fn as fn
 import nvidia.dali.types as types
+import cv2
+import numpy as np
 
 
 @pipeline_def
@@ -10,11 +11,15 @@ def image_pipeline(
     crop_size: int,
     upscale_factor: float,
     mode: str = "train",
+    shuffle: bool = True,
+    seed: int = 42,
 ):
     read = fn.readers.webdataset(
         paths=wds_paths,
         ext=["hr.png", "lr.png"],
         missing_component_behavior="error",
+        random_shuffle=shuffle,
+        seed=seed,
         name="Reader",
     )
 
@@ -23,18 +28,18 @@ def image_pipeline(
 
     hr, lr = read
 
-    hr = fn.decoders.image_crop(
+    hr = fn.decoders.image(
         hr,
         device="mixed",
     )
-    lr = fn.decoders.image_crop(
+    lr = fn.decoders.image(
         lr,
         device="mixed",
     )
 
     if mode == "train":
-        pos_x = fn.random.uniform(range=(0, 1))
-        pos_y = fn.random.uniform(range=(0, 1))
+        pos_x = fn.random.uniform(range=(0, 1), seed=seed)
+        pos_y = fn.random.uniform(range=(0, 1), seed=seed + 1)
     else:
         pos_x = 0.5
         pos_y = 0.5
@@ -61,146 +66,115 @@ def image_pipeline(
     return hr, lr
 
 
+# --- Main Test Script ---
 if __name__ == "__main__":
-    test_tar_file_path = "data/test/sr_test-000000.tar"
+    wds_files = ["./data/test/sr_test-000000.tar"]
 
-    # Pipeline parameters
-    batch_size = 4
-    num_threads = 2
-    crop_size_val = 64
-    upscale_factor_val = 2.0
-    wds_paths_val = [test_tar_file_path]
+    # 2. Define pipeline parameters
+    batch_size = 2  # Test with a batch size > 1
+    crop_s = 256  # Desired LR crop size
+    up_factor = 2.0  # Upscale factor
 
-    print("\n--- Testing 'train' mode ---")
-    train_pipe = image_pipeline(
-        wds_paths=wds_paths_val,
-        crop_size=crop_size_val,
-        upscale_factor=upscale_factor_val,
+    # --- Test "train" mode (random crops) ---
+    print("\n--- Testing 'train' mode (random crops) ---")
+    pipe_train = image_pipeline(
+        wds_paths=wds_files,
+        crop_size=crop_s,
+        upscale_factor=up_factor,
         mode="train",
         batch_size=batch_size,
-        num_threads=num_threads,
+        num_threads=2,
+        device_id=0,
     )
+    pipe_train.build()
 
-    train_pipe.build()
-    # Check epoch size
-    train_epoch_size = train_pipe.epoch_size("Reader")
-    print(f"Reader epoch size (train): {train_epoch_size}")
-    if train_epoch_size == 0 or not isinstance(train_epoch_size, int):
-        print(
-            "ERROR: No data found by the WebDataset reader. Check paths and tar file content."
-        )
-    else:
-        num_train_iterations = (train_epoch_size + batch_size - 1) // batch_size
-        print(f"Running {num_train_iterations} iterations for train mode...")
-        for i in range(num_train_iterations):
-            try:
-                outputs = train_pipe.run()
-                hr_out_gpu = outputs[0]  # This is a TensorListGPU
-                lr_out_gpu = outputs[1]  # This is a TensorListGPU
+    # Run a few iterations to see different random crops
+    for iteration in range(2):  # Show 2 batches
+        print(f"Train mode - Iteration {iteration + 1}")
+        pipe_out_train = pipe_train.run()
 
-                # Transfer to CPU to check shapes and data (as numpy arrays)
-                hr_out_cpu = (
-                    hr_out_gpu.as_cpu().as_array()
-                )  # .as_array() concatenates tensors in the list
-                lr_out_cpu = lr_out_gpu.as_cpu().as_array()
+        hr_images_gpu = pipe_out_train[0]
+        lr_images_gpu = pipe_out_train[1]
 
-                print(f"\nTrain Iteration {i+1}/{num_train_iterations}:")
-                print(
-                    f"  HR batch shape: {hr_out_cpu.shape}, dtype: {hr_out_cpu.dtype}"
-                )
-                print(
-                    f"  LR batch shape: {lr_out_cpu.shape}, dtype: {lr_out_cpu.dtype}"
-                )
-                print(
-                    f"  HR min: {np.min(hr_out_cpu):.2f}, max: {np.max(hr_out_cpu):.2f}, mean: {np.mean(hr_out_cpu):.2f}"
-                )
-                print(
-                    f"  LR min: {np.min(lr_out_cpu):.2f}, max: {np.max(lr_out_cpu):.2f}, mean: {np.mean(lr_out_cpu):.2f}"
-                )
+        for i in range(batch_size):
+            hr_img_chw = hr_images_gpu.as_cpu().at(i)  # Output is CHW
+            lr_img_chw = lr_images_gpu.as_cpu().at(i)  # Output is CHW
 
-                # Verify expected shapes
-                expected_hr_h = int(crop_size_val * upscale_factor_val)
-                expected_hr_w = int(crop_size_val * upscale_factor_val)
-                # The actual batch size might be smaller in the last iteration if not perfectly divisible
-                current_batch_size = hr_out_cpu.shape[0]
-                assert hr_out_cpu.shape == (
-                    current_batch_size,
-                    3,
-                    expected_hr_h,
-                    expected_hr_w,
-                )
-                assert lr_out_cpu.shape == (
-                    current_batch_size,
-                    3,
-                    crop_size_val,
-                    crop_size_val,
-                )
-                assert hr_out_cpu.dtype == np.float32
-                assert lr_out_cpu.dtype == np.float32
-                assert np.max(hr_out_cpu) <= 1.0 and np.min(hr_out_cpu) >= 0.0
-                assert np.max(lr_out_cpu) <= 1.0 and np.min(lr_out_cpu) >= 0.0
+            # Convert CHW (DALI output) to HWC (OpenCV input) and scale back to 0-255
+            hr_img_hwc = (np.transpose(hr_img_chw, (1, 2, 0)) * 255).astype(np.uint8)
+            lr_img_hwc = (np.transpose(lr_img_chw, (1, 2, 0)) * 255).astype(np.uint8)
 
-            except StopIteration:
-                print("StopIteration: End of dataset in train mode.")
-                break
-            except RuntimeError as e:
-                print(f"DALI RuntimeError: {e}")
-                if "WebDataset reader" in str(e) and "component not found" in str(e):
-                    print(
-                        "Hint: Ensure your tar file contains both 'hr.png' and 'lr.png' for each sample key."
-                    )
-                break
-        print("Train mode test finished.")
+            # DALI decodes to RGB, OpenCV imshow expects BGR
+            hr_img_bgr = cv2.cvtColor(hr_img_hwc, cv2.COLOR_RGB2BGR)
+            lr_img_bgr = cv2.cvtColor(lr_img_hwc, cv2.COLOR_RGB2BGR)
 
-    print("\n--- Testing 'test' mode ---")
-    val_pipe = image_pipeline(
-        wds_paths=wds_paths_val,
-        crop_size=crop_size_val,
-        upscale_factor=upscale_factor_val,
-        mode="test",
+            cv2.imshow(f"Train HR Batch {i} Iter {iteration}", hr_img_bgr)
+            cv2.imshow(f"Train LR Batch {i} Iter {iteration}", lr_img_bgr)
+
+            print(
+                f"  Displayed Train HR shape: {hr_img_bgr.shape}, LR shape: {lr_img_bgr.shape}"
+            )
+
+            # Check sizes
+            expected_hr_h = int(crop_s * up_factor)
+            expected_hr_w = int(crop_s * up_factor)
+            expected_lr_h = crop_s
+            expected_lr_w = crop_s
+            assert hr_img_bgr.shape == (
+                expected_hr_h,
+                expected_hr_w,
+                3,
+            ), f"HR shape mismatch: {hr_img_bgr.shape}"
+            assert lr_img_bgr.shape == (
+                expected_lr_h,
+                expected_lr_w,
+                3,
+            ), f"LR shape mismatch: {lr_img_bgr.shape}"
+
+        print("Press any key to continue to next batch/mode...")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+    # --- Test "validation" mode (center crops) ---
+    print("\n--- Testing 'val' mode (center crops) ---")
+    pipe_val = image_pipeline(
+        wds_paths=wds_files,
+        crop_size=crop_s,
+        upscale_factor=up_factor,
+        mode="val",  # Or any string other than "train"
         batch_size=batch_size,
-        num_threads=num_threads,
+        num_threads=2,
+        device_id=0,
     )
+    pipe_val.build()
+    pipe_out_val = pipe_val.run()  # Only need one run for center crop verification
 
-    val_pipe.build()
-    val_epoch_size = val_pipe.epoch_size("Reader")
-    print(f"Reader epoch size (val): {val_epoch_size}")
+    hr_images_gpu_val = pipe_out_val[0]
+    lr_images_gpu_val = pipe_out_val[1]
 
-    if val_epoch_size == 0 or not isinstance(val_epoch_size, int):
-        print("ERROR: No data found by the WebDataset reader for val mode.")
-    else:
-        num_val_iterations = (val_epoch_size + batch_size - 1) // batch_size
-        print(f"Running {num_val_iterations} iterations for val mode...")
-        for i in range(num_val_iterations):
-            try:
-                outputs = val_pipe.run()
-                hr_out_gpu = outputs[0]
-                lr_out_gpu = outputs[1]
+    for i in range(batch_size):
+        hr_img_chw_val = hr_images_gpu_val.as_cpu().at(i)
+        lr_img_chw_val = lr_images_gpu_val.as_cpu().at(i)
 
-                hr_out_cpu = hr_out_gpu.as_cpu().as_array()
-                lr_out_cpu = lr_out_gpu.as_cpu().as_array()
+        hr_img_hwc_val = (np.transpose(hr_img_chw_val, (1, 2, 0)) * 255).astype(
+            np.uint8
+        )
+        lr_img_hwc_val = (np.transpose(lr_img_chw_val, (1, 2, 0)) * 255).astype(
+            np.uint8
+        )
 
-                print(f"\nTest Iteration {i+1}/{num_val_iterations}:")
-                print(
-                    f"  HR batch shape: {hr_out_cpu.shape}, dtype: {hr_out_cpu.dtype}"
-                )
-                print(
-                    f"  LR batch shape: {lr_out_cpu.shape}, dtype: {lr_out_cpu.dtype}"
-                )
-                # For val mode, crops should be centered, so values might be more consistent if images are similar
-                print(
-                    f"  HR min: {np.min(hr_out_cpu):.2f}, max: {np.max(hr_out_cpu):.2f}, mean: {np.mean(hr_out_cpu):.2f}"
-                )
-                print(
-                    f"  LR min: {np.min(lr_out_cpu):.2f}, max: {np.max(lr_out_cpu):.2f}, mean: {np.mean(lr_out_cpu):.2f}"
-                )
+        hr_img_bgr_val = cv2.cvtColor(hr_img_hwc_val, cv2.COLOR_RGB2BGR)
+        lr_img_bgr_val = cv2.cvtColor(lr_img_hwc_val, cv2.COLOR_RGB2BGR)
 
-            except StopIteration:
-                print("StopIteration: End of dataset in val mode.")
-                break
-            except RuntimeError as e:
-                print(f"DALI RuntimeError: {e}")
-                break
-        print("Test mode test finished.")
+        cv2.imshow(f"Val HR Batch {i}", hr_img_bgr_val)
+        cv2.imshow(f"Val LR Batch {i}", lr_img_bgr_val)
 
-    print("\nPipeline testing complete.")
+        print(
+            f"  Displayed Val HR shape: {hr_img_bgr_val.shape}, LR shape: {lr_img_bgr_val.shape}"
+        )
+
+    print("Press any key to close all windows and exit.")
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    print("\nTest finished.")

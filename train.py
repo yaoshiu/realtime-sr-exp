@@ -18,9 +18,10 @@ def load_dataset(
     test_dir: str,
     *,
     upscale_factor: float,
-    batch_size=64,
+    batch_size=96,
     crop_size=128,
-    num_workers=24,
+    shuffle=True,
+    num_workers=12,
 ):
     tr_paths = sorted(glob(os.path.join(train_dir, "*.tar")))
     te_paths = sorted(glob(os.path.join(test_dir, "*.tar")))
@@ -30,6 +31,7 @@ def load_dataset(
         crop_size=crop_size,
         upscale_factor=upscale_factor,
         mode="train",
+        shuffle=shuffle,
         batch_size=batch_size,
         num_threads=num_workers,
     )
@@ -38,6 +40,7 @@ def load_dataset(
         crop_size=crop_size,
         upscale_factor=upscale_factor,
         mode="test",
+        shuffle=shuffle,
         batch_size=batch_size,
         num_threads=num_workers,
     )
@@ -48,13 +51,11 @@ def load_dataset(
         tr_pipeline,
         ["hr", "lr"],
         reader_name="Reader",
-        auto_reset=True,
     )
     te_loader = DALIGenericIterator(
         te_pipeline,
         ["hr", "lr"],
         reader_name="Reader",
-        auto_reset=True,
     )
 
     return tr_loader, te_loader
@@ -84,17 +85,9 @@ def train(
 
     model.train()
 
-    batch_index = 0
-
     end = time.time()
 
-    # train_loader.reset()
-    # batch_data = train_loader.next()
-
-    # while batch_data is not None:
-    #     hr = batch_data
-
-    for d in train_loader:
+    for i, d in enumerate(train_loader):
         data_time.update(time.time() - end)
 
         model.zero_grad()
@@ -126,15 +119,9 @@ def train(
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if batch_index % print_freq == 0:
-            writer.add_scalar(
-                "Train/Loss", loss.item(), batch_index + epoch * batches + 1
-            )
-            progress.display(batch_index + 1)
-
-        batch_index += 1
-
-        # batch_data = train_loader.next()
+        if i % print_freq == 0:
+            writer.add_scalar("Train/Loss", loss.item(), i + epoch * batches + 1)
+            progress.display(i + 1)
 
 
 def validate(
@@ -159,17 +146,10 @@ def validate(
 
     model.eval()
 
-    batch_index = 0
-
     end = time.time()
 
-    # valid_loader.reset()
-    # batch_data = valid_loader.next()
-
-    # while batch_data is not None:
-    for d in valid_loader:
+    for i, d in enumerate(valid_loader):
         with torch.no_grad():
-            # hr = batch_data
             with amp.autocast_mode.autocast("cuda"):
                 hr = d[0]["hr"]
                 lr = d[0]["lr"]
@@ -213,12 +193,8 @@ def validate(
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if batch_index % print_freq == 0:
-                progress.display(batch_index + 1)
-
-            batch_index += 1
-
-            # batch_data = valid_loader.next()
+            if i % print_freq == 0:
+                progress.display(i + 1)
 
     progress.display_summary()
 
