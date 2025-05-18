@@ -144,10 +144,23 @@ def bgr_to_rgb_torch(bgr_tensor: torch.Tensor):
     return rgb_tensor
 
 
+@torch.jit.script
+def rgb_to_bgr_torch(rgb_tensor: torch.Tensor):
+    bgr_tensor = torch.flip(rgb_tensor, [1])
+
+    return bgr_tensor
+
+
 def image_to_tensor(image: np.ndarray, device: torch.device | str = "cpu"):
     tensor = torch.from_numpy(image).to(device).permute(2, 0, 1).float() / 255.0
 
     return tensor
+
+
+def tensor_to_image(tensor: torch.Tensor):
+    image = (tensor * 255.0).permute(1, 2, 0).clamp_(0, 255).cpu().numpy()
+
+    return image.astype(np.uint8)
 
 
 class Summary(Enum):
