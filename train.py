@@ -1,8 +1,8 @@
 from glob import glob
 import os
+import random
 import shutil
 import time
-
 import argparse
 import torch
 from torch import amp, optim
@@ -10,6 +10,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from torch.nn import DataParallel
 from dataset import image_pipeline
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
+from nvidia.dali.plugin.base_iterator import LastBatchPolicy
 from utils import *
 
 
@@ -18,10 +19,11 @@ def load_dataset(
     test_dir: str,
     *,
     upscale_factor: float,
-    batch_size=96,
-    crop_size=128,
+    batch_size=64,
+    crop_size=256,
     shuffle=True,
-    num_workers=12,
+    num_workers=32,
+    seed=42,
 ):
     tr_paths = sorted(glob(os.path.join(train_dir, "*.tar")))
     te_paths = sorted(glob(os.path.join(test_dir, "*.tar")))
@@ -34,15 +36,17 @@ def load_dataset(
         shuffle=shuffle,
         batch_size=batch_size,
         num_threads=num_workers,
+        seed=seed,
     )
     te_pipeline = image_pipeline(
         wds_paths=te_paths,
         crop_size=crop_size,
         upscale_factor=upscale_factor,
         mode="test",
-        shuffle=shuffle,
+        shuffle=False,
         batch_size=batch_size,
         num_threads=num_workers,
+        seed=seed,
     )
     tr_pipeline.build()
     te_pipeline.build()
@@ -51,11 +55,13 @@ def load_dataset(
         tr_pipeline,
         ["hr", "lr"],
         reader_name="Reader",
+        last_batch_policy=LastBatchPolicy.PARTIAL,
     )
     te_loader = DALIGenericIterator(
         te_pipeline,
         ["hr", "lr"],
         reader_name="Reader",
+        last_batch_policy=LastBatchPolicy.PARTIAL,
     )
 
     return tr_loader, te_loader
@@ -65,8 +71,7 @@ def train(
     model: torch.nn.Module,
     train_loader: DALIGenericIterator,
     criterion: torch.nn.MSELoss,
-    optimizer: optim.SGD,
-    upscale_factor: float,
+    optimizer: optim.Optimizer,
     epoch: int,
     scaler: amp.grad_scaler.GradScaler,
     writer: SummaryWriter,
@@ -100,13 +105,6 @@ def train(
             lr = rgb_to_y_torch(lr)
 
             sr = model(lr)
-            if upscale_factor != 2:
-                sr = F.interpolate(
-                    sr,
-                    scale_factor=upscale_factor / 2,
-                    mode="bilinear",
-                    align_corners=False,
-                )
 
             loss = criterion(sr, hr)
 
@@ -130,7 +128,6 @@ def validate(
     psnr_model: PSNR,
     ssim_model: SSIM,
     epoch: int,
-    upscale_factor: float,
     writer: SummaryWriter,
     mode="val",
     print_freq=200,
@@ -154,35 +151,10 @@ def validate(
                 hr = d[0]["hr"]
                 lr = d[0]["lr"]
 
-                hr = rgb_to_ycbcr_torch(hr)
-                lr = rgb_to_ycbcr_torch(lr)
+                lr = rgb_to_y_torch(lr)
+                hr = rgb_to_y_torch(hr)
 
-                lr_y, lr_cb, lr_cr = torch.split(lr, 1, dim=1)
-
-                sr_cb = F.interpolate(
-                    lr_cb,
-                    scale_factor=upscale_factor,
-                    mode="bilinear",
-                    align_corners=False,
-                )
-                sr_cr = F.interpolate(
-                    lr_cr,
-                    scale_factor=upscale_factor,
-                    mode="bilinear",
-                    align_corners=False,
-                )
-
-                sr_y = model(lr_y)
-
-                if upscale_factor != 2:
-                    sr_y = torch.nn.functional.interpolate(
-                        sr_y,
-                        scale_factor=upscale_factor / 2,
-                        mode="bilinear",
-                        align_corners=False,
-                    )
-
-                sr = torch.cat([sr_y, sr_cb, sr_cr], dim=1)
+                sr = model(lr)
 
             psnr = psnr_model(sr, hr)
             ssim = ssim_model(sr, hr)
@@ -210,6 +182,11 @@ def main(args):
     best_psnr = 0.0
     best_ssim = 0.0
 
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+
     device = choice_device(args.device)
     print(f"Using `{device}` device.")
 
@@ -220,26 +197,32 @@ def main(args):
     print(f"Build `{args.model_arch_name}` model successfully.")
 
     train_loader, test_loader = load_dataset(
-        args.train_dir, args.test_dir, upscale_factor=args.upscale_factor
+        args.train_dir,
+        args.test_dir,
+        upscale_factor=args.upscale_factor,
+        batch_size=args.batch_size,
+        crop_size=args.crop_size,
+        num_workers=args.num_workers,
+        seed=args.seed,
     )
     print("Load datasets successfully.")
 
     criterion = torch.nn.MSELoss().to(device=device)
     print("Define loss function successfully.")
 
-    optimizer = optim.SGD(
+    optimizer = optim.AdamW(
         model.parameters(),
         lr=args.model_lr,
-        momentum=args.model_momentum,
         weight_decay=args.model_weight_decay,
-        nesterov=args.model_nesterov,
     )
     print("Define optimizer successfully.")
 
-    scheduler = optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=args.model_milestones, gamma=args.model_gamma
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=1e-6
     )
     print("Define scheduler successfully.")
+
+    scaler = amp.grad_scaler.GradScaler()
 
     if args.model_weights_path:
         checkpoint = torch.load(
@@ -250,7 +233,7 @@ def main(args):
         best_ssim = checkpoint.get("best_ssim", 0.0)
         state_dict = checkpoint.get("state_dict", None)
         if isinstance(model, DataParallel):
-            model.module.load_state_dict(state_dict, strict=False)
+            model.module.load_state_dict(state_dict, strict=True)
         else:
             from collections import OrderedDict
 
@@ -260,27 +243,30 @@ def main(args):
                     new_state_dict[k[7:]] = v
                 else:
                     new_state_dict[k] = v
-            model.load_state_dict(new_state_dict, strict=False)
+            model.load_state_dict(new_state_dict, strict=True)
         if "optimizer" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer"])
         if "scheduler" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler"])
+        if "scaler" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler"])
         print(f"Load model weights from `{args.model_weights_path}` successfully.")
     else:
         print("No model weights path provided, starting from scratch.")
 
-    samples_dir = os.path.join(args.samples_dir, args.model_arch_name)
-    results_dir = os.path.join(args.results_dir, args.model_arch_name)
+    samples_dir = os.path.join(
+        args.samples_dir, args.model_arch_name, args.experiment_name
+    )
+    results_dir = os.path.join(
+        args.results_dir, args.model_arch_name, args.experiment_name
+    )
     os.makedirs(samples_dir, exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
 
     writer = SummaryWriter(os.path.join(samples_dir, "logs"))
 
-    scaler_enabled = device.type == "cuda"
-    scaler = amp.grad_scaler.GradScaler("cuda", enabled=scaler_enabled)
-
-    psnr_model = PSNR(args.upscale_factor, False).to(device=device)
-    ssim_model = SSIM(args.upscale_factor, False).to(device=device)
+    psnr_model = PSNR(args.upscale_factor, False)
+    ssim_model = SSIM(args.upscale_factor, False)
 
     for epoch in range(start_epoch, args.epochs):
         train(
@@ -288,7 +274,6 @@ def main(args):
             train_loader,
             criterion,
             optimizer,
-            args.upscale_factor,
             epoch,
             scaler,
             writer,
@@ -299,7 +284,6 @@ def main(args):
             psnr_model,
             ssim_model,
             epoch,
-            args.upscale_factor,
             writer,
             mode="test",
         )
@@ -307,7 +291,7 @@ def main(args):
 
         scheduler.step()
 
-        is_best = psnr > best_psnr and ssim > best_ssim
+        is_best = psnr >= best_psnr and ssim >= best_ssim
         is_last = epoch + 1 == args.epochs
         best_psnr = max(psnr, best_psnr)
         best_ssim = max(ssim, best_ssim)
@@ -326,6 +310,7 @@ def main(args):
                 "state_dict": state_dict,
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
+                "scaler": scaler.state_dict(),
             },
             os.path.join(samples_dir, f"epoch_{epoch + 1}.pth"),
         )
@@ -346,20 +331,27 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a super-resolution model.")
+    parser.add_argument(
+        "--experiment_name", type=str, default="AdamW_CosineAnnealingLR"
+    )
     parser.add_argument("--train_dir", type=str, default="/dev/shm/train")
     parser.add_argument("--test_dir", type=str, default="/dev/shm/test")
     parser.add_argument("--samples_dir", type=str, default="./samples")
     parser.add_argument("--results_dir", type=str, default="./results")
-    parser.add_argument("--epochs", type=int, default=3000)
+    parser.add_argument("--epochs", type=int, default=500)
     parser.add_argument("--upscale_factor", type=float, default=2)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--model_weights_path", type=str, default=None)
-    parser.add_argument("--model_milestones", type=list, default=[300, 2400])
-    parser.add_argument("--model_gamma", type=float, default=0.1)
-    parser.add_argument("--model_arch_name", type=str, default="rt4ksr_x2")
-    parser.add_argument("--model_lr", type=float, default=1e-3)
-    parser.add_argument("--model_momentum", type=float, default=0.9)
+    parser.add_argument("--model_arch_name", type=str, default="espcn_x2")
+    parser.add_argument("--model_lr", type=float, default=2e-4)
     parser.add_argument("--model_weight_decay", type=float, default=1e-4)
-    parser.add_argument("--model_nesterov", type=bool, default=False)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--num_workers", type=int, default=32)
+    parser.add_argument(
+        "--crop_size", type=int, default=256, help="Desired LR crop size"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for reproducibility"
+    )
     args = parser.parse_args()
     main(args)
