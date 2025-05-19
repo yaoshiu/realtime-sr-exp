@@ -40,9 +40,11 @@ def image_pipeline(
     if mode == "train":
         pos_x = fn.random.uniform(range=(0, 1), seed=seed)
         pos_y = fn.random.uniform(range=(0, 1), seed=seed + 1)
+        mirror = fn.random.choice([0, 1, 2], seed=seed)
     else:
         pos_x = 0.5
         pos_y = 0.5
+        mirror = 0
 
     hr = fn.crop_mirror_normalize(
         hr,
@@ -51,6 +53,7 @@ def image_pipeline(
         crop=(crop_size * upscale_factor, crop_size * upscale_factor),
         crop_pos_x=pos_x,
         crop_pos_y=pos_y,
+        mirror=mirror,
         device="gpu",
     )
     lr = fn.crop_mirror_normalize(
@@ -60,6 +63,7 @@ def image_pipeline(
         crop=(crop_size, crop_size),
         crop_pos_x=pos_x,
         crop_pos_y=pos_y,
+        mirror=mirror,
         device="gpu",
     )
 
